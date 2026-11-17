@@ -29,8 +29,11 @@ import App from '../layouts/App.astro';
         <div class="hidden mt-3 max-h-64 overflow-auto" data-table-for="daily"></div>
       </section>
       <section class="card card-pad">
-        <h2 class="font-semibold">Average rate each day</h2>
-        <p class="text-xs text-muted">Rs per kg, weighted by kg bought</p>
+        <div class="flex justify-between items-start gap-2">
+          <div><h2 class="font-semibold">Average rate each day</h2>
+          <p class="text-xs text-muted">Rs per kg, weighted by kg bought</p></div>
+          <select id="rate-flower" class="input !w-32 !py-1" aria-label="Flower"></select>
+        </div>
         <div class="h-64 mt-3"><canvas id="c-rate" aria-label="Average rate each day"></canvas></div>
       </section>
     </div>
@@ -119,17 +122,25 @@ import App from '../layouts/App.astro';
       options: { scales: { x: { stacked: true }, y: { stacked: true } } } as any,
     }, { unit: 'kg', legend: flowers.length > 1 });
 
+    // One flower at a time: Motia (Rs 700+) and Gulab (Rs 100) do not share a scale.
+    const rsel = $('rate-flower') as HTMLSelectElement;
+    const byKg = rep.by_flower.map((f: any) => f.flower);
+    if (rsel.dataset.month !== month) {
+      rsel.innerHTML = byKg.map((f: string) => `<option>${esc(f)}</option>`).join('');
+      rsel.dataset.month = month;
+    }
+    const rf = rsel.value || byKg[0];
     makeChart($('c-rate') as HTMLCanvasElement, {
       type: 'line',
       data: {
         labels,
-        datasets: flowers.map((f) => ({
-          label: f, data: rep.daily.map((d: any) => d.by_flower[f]?.avg_rate ?? null),
-          borderColor: series(flowerSlot(f, flowers)), backgroundColor: series(flowerSlot(f, flowers)), spanGaps: true,
-        })),
+        datasets: [{
+          label: rf, data: rep.daily.map((d: any) => d.by_flower[rf]?.avg_rate ?? null),
+          borderColor: series(flowerSlot(rf, flowers)), backgroundColor: series(flowerSlot(rf, flowers)), spanGaps: true,
+        }],
       },
       options: { scales: { y: { beginAtZero: false } } } as any,
-    }, { money: true, legend: flowers.length > 1 });
+    }, { money: true, legend: false });
 
     makeChart($('c-trend') as HTMLCanvasElement, {
       type: 'bar',
@@ -187,6 +198,7 @@ import App from '../layouts/App.astro';
     if (!themed) { themed = true; onTheme(() => rep && charts()); } else charts();
   }
 
+  $('rate-flower').addEventListener('change', () => charts());
   document.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-table]');
     if (!b) return;

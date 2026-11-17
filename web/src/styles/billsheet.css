@@ -46,7 +46,7 @@
   width: fit-content;
   max-width: 96%;
 }
-.bs-head-pics { display: flex; gap: 1.2cqw; align-items: center; justify-content: center; margin-top: 1.2cqw; }
+.bs-head-pics { direction: ltr; display: flex; gap: 1.2cqw; align-items: center; justify-content: center; margin-top: 1.2cqw; }
 .bs-pic { width: 9cqw; height: 10cqw; border-radius: .8cqw; overflow: hidden; border: .3cqw solid #fff; }
 .bs-pic svg, .bs-wreaths svg { width: 100%; height: 100%; display: block; }
 .bs-car { width: 18cqw; border-radius: 50%; height: 12cqw; }
