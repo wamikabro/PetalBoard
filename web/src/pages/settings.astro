@@ -38,10 +38,10 @@ import App from '../layouts/App.astro';
     <section class="card overflow-hidden" id="users-card">
       <div class="card-pad pb-2 flex items-center justify-between gap-2">
         <div><h2 class="font-semibold">People who can log in</h2>
-          <p class="text-sm text-muted">Owner: everything. Manager: close months, advances, investors. Clerk: daily entry. Viewer: look only.</p></div>
+          <p class="text-sm text-muted">Each person logs in with their own password only. Owner: everything. Manager: close months, advances, investors. Clerk: daily entry. Viewer: look only.</p></div>
         <button class="btn-ghost" id="add-user">+ Person</button>
       </div>
-      <div class="overflow-x-auto"><table class="tbl"><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody id="users"></tbody></table></div>
+      <div class="overflow-x-auto"><table class="tbl"><thead><tr><th>Name</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody id="users"></tbody></table></div>
     </section>
 
     <section class="card card-pad">
@@ -105,7 +105,7 @@ import App from '../layouts/App.astro';
     const us = await api('/users');
     const me = getUser();
     $('users').innerHTML = us.map((u: any) => `<tr>
-      <td class="font-medium">${esc(u.display_name)}${u.id === me?.id ? ' <span class="text-xs text-muted">(you)</span>' : ''}</td><td>${esc(u.username)}</td>
+      <td class="font-medium">${esc(u.display_name)}${u.id === me?.id ? ' <span class="text-xs text-muted">(you)</span>' : ''}</td>
       <td class="capitalize">${u.role}</td><td>${u.active ? '<span class="chip bg-good/10 text-good">Active</span>' : '<span class="chip bg-sunken text-muted">Off</span>'}</td>
       <td class="text-right"><button class="text-sm text-brand" data-user="${u.id}">Edit</button></td></tr>`).join('');
     (window as any)._users = us;
@@ -117,7 +117,7 @@ import App from '../layouts/App.astro';
     const v = await dialog(`Edit ${u.display_name}`, `
       <div><label class="label">Name</label><input name="display_name" class="input" value="${esc(u.display_name)}" /></div>
       <div><label class="label">Role</label><select name="role" class="input">${ROLES.map((r) => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
-      <div><label class="label">New password (leave empty to keep)</label><input name="password" type="password" class="input" minlength="8" autocomplete="new-password" /></div>
+      <div><label class="label">New password (leave empty to keep; it logs them out everywhere)</label><input name="password" class="input" minlength="8" autocomplete="off" /></div>
       <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="active" value="1" ${u.active ? 'checked' : ''} /> Can log in</label>`);
     if (v) await busy(b, async () => {
       await api(`/users/${u.id}`, { method: 'PATCH', body: { display_name: v.display_name, role: v.role, active: !!v.active, password: v.password || undefined } });
@@ -127,9 +127,8 @@ import App from '../layouts/App.astro';
   $('add-user').addEventListener('click', async () => {
     const v = await dialog('New person', `
       <div><label class="label">Name</label><input name="display_name" class="input" required /></div>
-      <div><label class="label">Username</label><input name="username" class="input" required autocomplete="off" /></div>
       <div><label class="label">Role</label><select name="role" class="input">${ROLES.map((r) => `<option ${r === 'clerk' ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
-      <div><label class="label">Password (at least 8 letters)</label><input name="password" type="password" class="input" minlength="8" required autocomplete="new-password" /></div>`, 'Add');
+      <div><label class="label">Password (at least 8 letters, different from everyone else's: it is how they log in)</label><input name="password" class="input" minlength="8" required autocomplete="off" /></div>`, 'Add');
     if (v) try { await api('/users', { method: 'POST', body: v }); toast('Added'); loadUsers(); } catch (ex: any) { toast(ex.message, 'error'); }
   });
 

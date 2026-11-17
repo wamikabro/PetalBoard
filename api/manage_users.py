@@ -28,28 +28,40 @@ def ask_password() -> str:
         print("They do not match.")
 
 
+WORDS = ["gulab", "motia", "genda", "kaliyan", "phool", "sehra", "gajra", "haar", "chameli", "raat",
+         "rani", "lily", "rose", "tulip", "jasmine", "daisy", "lotus", "orchid", "petal", "bahar"]
+
+
 def generate_password() -> str:
-    """Easy to type on a phone: four groups of letters and digits, e.g. kp7m-x2qd-9wtr-b4hn."""
-    alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
-    return "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(4))
+    """Simple to type: a flower word and four digits, e.g. motia4821. Logins are rate limited."""
+    return secrets.choice(WORDS) + "".join(secrets.choice("0123456789") for _ in range(4))
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="People log in with their password alone, so every password must be different.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("create")
     c.add_argument("username")
     c.add_argument("display_name")
     c.add_argument("role", choices=["owner", "manager", "clerk", "viewer"])
-    c.add_argument("--generate", action="store_true", help="make a strong password and print it once")
+    c.add_argument("--generate", action="store_true", help="make a simple password (flower word + 4 digits) and print it once")
     s = sub.add_parser("set-password")
     s.add_argument("username")
-    s.add_argument("--generate", action="store_true", help="make a strong password and print it once")
+    s.add_argument("--generate", action="store_true", help="make a simple password (flower word + 4 digits) and print it once")
     args = ap.parse_args()
 
     db.migrate()
-    password = generate_password() if args.generate else ask_password()
+    from routes_auth import find_user_by_password
     with db.transaction() as conn:
+        for _ in range(20):
+            password = generate_password() if args.generate else ask_password()
+            other = find_user_by_password(conn, password)
+            if not other or (args.cmd == "set-password" and other["username"] == args.username):
+                break
+            if not args.generate:
+                print("Someone else already uses that password. Choose a different one.")
+        else:
+            raise SystemExit("Could not find a free password")
         if args.cmd == "create":
             conn.execute(
                 "INSERT INTO users (username, display_name, role, password_hash) VALUES (%s, %s, %s, %s)",

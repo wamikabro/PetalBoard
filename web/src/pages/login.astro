@@ -16,15 +16,11 @@ import App from '../layouts/App.astro';
         <div class="lg:hidden flex items-center gap-2 mb-6"><img src="/favicon.svg" alt="" class="w-9 h-9" /><span class="text-xl font-semibold">PetalBoard</span></div>
         <div>
           <h1 class="h-title">Welcome back</h1>
-          <p class="text-sm text-muted mt-1">Log in to enter today's flowers.</p>
-        </div>
-        <div>
-          <label class="label" for="username">Username</label>
-          <input class="input" id="username" name="username" autocomplete="username" required />
+          <p class="text-sm text-muted mt-1">Enter your password. This device stays logged in.</p>
         </div>
         <div>
           <label class="label" for="password">Password</label>
-          <input class="input" id="password" name="password" type="password" autocomplete="current-password" required />
+          <input class="input !text-lg tracking-wide" id="password" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus />
         </div>
         <p id="err" class="text-sm text-bad hidden" role="alert"></p>
         <button class="btn-primary w-full !py-2.5" type="submit">Log in</button>
@@ -44,7 +40,7 @@ import App from '../layouts/App.astro';
     err.classList.add('hidden');
     try {
       const fd = new FormData(form);
-      const r = await api('/auth/login', { method: 'POST', body: { username: fd.get('username'), password: fd.get('password') } });
+      const r = await api('/auth/login', { method: 'POST', body: { password: fd.get('password') } });
       saveLogin(r.token, r.user);
       const next = new URLSearchParams(location.search).get('next');
       location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/';

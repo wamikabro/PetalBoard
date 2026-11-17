@@ -182,3 +182,33 @@ def test_session_renews_on_use(client):
     with db.transaction() as conn:
         left = conn.execute("SELECT expires_at - now() AS d FROM sessions ORDER BY last_seen DESC NULLS LAST LIMIT 1").fetchone()["d"]
     assert left.days >= 300
+
+
+def test_login_with_password_only(client):
+    from fastapi.testclient import TestClient
+    from main import app
+    with TestClient(app) as c:
+        r = c.post("/auth/login", json={"password": "clerk-pass-1"})
+        assert r.status_code == 200 and r.json()["user"]["role"] == "clerk"
+        assert c.post("/auth/login", json={"password": "not-a-password"}).status_code == 401
+
+
+def test_passwords_must_be_unique(client):
+    r = client.post("/users", json={"display_name": "Second Clerk", "role": "clerk", "password": "clerk-pass-1"})
+    assert r.status_code == 400
+    r = client.post("/users", json={"display_name": "Second Clerk", "role": "clerk", "password": "another-pass-9"})
+    assert r.status_code == 200 and r.json()["username"] == "secondclerk"
+
+
+def test_wrong_passwords_are_limited(client):
+    import routes_auth
+    from fastapi.testclient import TestClient
+    from main import app
+    routes_auth._FAILS.clear()
+    try:
+        with TestClient(app) as c:
+            codes = [c.post("/auth/login", json={"password": f"wrong-{i}"}).status_code for i in range(12)]
+            assert codes[:10] == [401] * 10 and codes[10:] == [429, 429]
+            assert c.post("/auth/login", json={"password": "owner-pass-1"}).status_code == 429   # even the right one waits
+    finally:
+        routes_auth._FAILS.clear()
