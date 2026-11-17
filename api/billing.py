@@ -145,6 +145,8 @@ def load_bill(conn, bill_id: int) -> dict:
                            ("kharcha", "Kharcha"), ("final", "Final total")):
             pv = paper.get(key)
             mine = t[key] if key != "kharcha" else t["kharcha"] + t["opening_due"]
+            if key == "final" and paper.get("advance_cut"):
+                mine -= paper["advance_cut"]   # the workbook takes the month's advance cut off the final
             if pv is not None and pv != mine:
                 warnings.append(f"Paper bill wrote {label} {pv:,}; the rows give {mine:,}")
 
