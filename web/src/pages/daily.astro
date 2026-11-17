@@ -22,22 +22,26 @@ import App from '../layouts/App.astro';
     </div>
 
     <!-- Day totals -->
-    <div class="grid grid-cols-2 md:grid-cols-5 gap-3" id="tiles"></div>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-2 sm:gap-3" id="tiles"></div>
 
     <!-- Tools -->
     <div class="card card-pad flex flex-col lg:flex-row gap-3 lg:items-end">
       <div class="flex-1 min-w-0">
-        <label class="label" for="search">Find supplier</label>
-        <input id="search" class="input" placeholder="Type a name…  (press / to jump here)" autocomplete="off" />
+        <label class="label hidden sm:block" for="search">Find supplier</label>
+        <div class="flex gap-2">
+          <input id="search" class="input" type="search" placeholder="Find supplier…" autocomplete="off" />
+          <button type="button" class="btn-ghost lg:hidden" id="more-btn" aria-expanded="false" aria-controls="more-tools">More</button>
+        </div>
       </div>
       <div>
-        <label class="label">Show</label>
-        <div class="flex rounded-lg border border-line overflow-hidden text-sm" id="show">
+        <label class="label hidden sm:block">Show</label>
+        <div class="grid grid-cols-3 sm:flex rounded-lg border border-line overflow-hidden text-sm" id="show">
           <button data-show="all" class="px-3 py-2">All</button>
-          <button data-show="pending" class="px-3 py-2 border-l border-line">Not entered</button>
+          <button data-show="pending" class="px-3 py-2 border-l border-line">To enter</button>
           <button data-show="done" class="px-3 py-2 border-l border-line">Entered</button>
         </div>
       </div>
+      <div class="hidden lg:contents" id="more-tools">
       <div class="flex flex-wrap gap-2 items-end" id="rate-fill">
         <div>
           <label class="label" for="fill-flower">Today's rate for</label>
@@ -52,6 +56,7 @@ import App from '../layouts/App.astro';
       <button class="btn-ghost" id="add-supplier">
         <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z" /></svg>New supplier
       </button>
+      </div>
     </div>
 
     <p id="closed-note" class="hidden text-sm rounded-lg bg-warn/10 text-warn px-3 py-2"></p>
@@ -64,7 +69,7 @@ import App from '../layouts/App.astro';
       <div id="rows" class="divide-y divide-line"></div>
       <p id="empty" class="hidden p-8 text-center text-muted text-sm">No suppliers match.</p>
     </div>
-    <p class="text-xs text-muted">
+    <p class="text-xs text-muted hidden md:block">
       Saves on its own when you leave a row. <kbd class="px-1 rounded border border-line">Enter</kbd> goes to the next supplier,
       <kbd class="px-1 rounded border border-line">↑</kbd> <kbd class="px-1 rounded border border-line">↓</kbd> move between rows.
       An empty rate takes the supplier's last rate when you click into it.
@@ -109,8 +114,8 @@ import App from '../layouts/App.astro';
       t('Suppliers entered', `${entered.length}<span class="text-base text-muted font-normal"> / ${active}</span>`) +
       t('Flowers bought', `${kg(Math.round(w * 100) / 100)} kg`) +
       t('Amount', rs(a)) +
-      t('Average rate', w ? `Rs ${(a / w).toFixed(0)}` : '—', 'per kg') +
-      t('Kharcha given', rs(k)).replace('class="card card-pad"', 'class="card card-pad col-span-2 md:col-span-1"');
+      t('Average rate', w ? `Rs ${(a / w).toFixed(0)}` : '—', 'per kg').replace('class="card card-pad"', 'class="card card-pad hidden md:block"') +
+      t('Kharcha given', rs(k));
   }
 
   function stateDot(r: Row) {
@@ -130,22 +135,25 @@ import App from '../layouts/App.astro';
       <span class="chip bg-brand-soft text-brand">${num(k.amount)}${k.tag ? `<sup>${esc(k.tag)}</sup>` : ''}${k.note ? ` · ${esc(k.note)}` : ''}
         ${locked ? '' : `<button data-del-k="${k.id}" class="ml-0.5 -mr-1 px-1 rounded hover:bg-brand/20" aria-label="Remove ${num(k.amount)}">×</button>`}
       </span>`).join('');
+    const lab = (t: string) => `<span class="md:hidden block text-[11px] font-medium text-muted mb-0.5">${t}</span>`;
     return `
-    <div class="row grid grid-cols-2 md:grid-cols-[minmax(150px,1.4fr)_110px_100px_120px_minmax(220px,2fr)_70px] gap-x-2 gap-y-2 px-4 py-2.5 items-center hover:bg-sunken/40 ${locked ? 'opacity-70' : ''}" data-i="${i}">
-      <div class="col-span-2 md:col-span-1 min-w-0 flex items-center gap-2">
-        <a href="/supplier?id=${r.supplier_id}" class="font-medium truncate hover:text-brand">${esc(r.supplier_name)}</a>
+    <div class="row grid grid-cols-3 md:grid-cols-[minmax(150px,1.4fr)_110px_100px_120px_minmax(220px,2fr)_70px] gap-x-2 gap-y-2 px-3 md:px-4 py-3 md:py-2.5 items-end md:items-center hover:bg-sunken/40 ${locked ? 'opacity-70' : ''}" data-i="${i}">
+      <div class="col-span-3 md:col-span-1 min-w-0 flex items-center gap-2">
+        <a href="/supplier?id=${r.supplier_id}" class="font-semibold md:font-medium truncate hover:text-brand">${esc(r.supplier_name)}</a>
         ${r.flower_name && r.flower_name !== 'Gulab' ? `<span class="chip bg-sunken text-muted">${esc(r.flower_name)}</span>` : ''}
-        <span class="md:hidden ml-auto">${stateDot(r)}</span>
+        <span class="md:hidden ml-auto shrink-0" data-state-m>${stateDot(r)}</span>
       </div>
-      <label class="md:contents"><span class="md:hidden label">Weight (kg)</span>
-        <input class="cell input md:!border-transparent" data-f="weight" type="number" inputmode="decimal" step="0.001" min="0" value="${r.weight ?? ''}" ${dis} aria-label="Weight for ${esc(r.supplier_name)}" /></label>
-      <label class="md:contents"><span class="md:hidden label">Rate (Rs/kg)</span>
-        <input class="cell input md:!border-transparent" data-f="rate" type="number" inputmode="decimal" step="0.01" min="0" value="${r.rate ?? ''}" placeholder="${r.last_rate ?? ''}" ${dis} aria-label="Rate for ${esc(r.supplier_name)}" /></label>
-      <div class="text-right tabular-nums font-medium" data-amount>${r.amount != null ? num(r.amount) : '<span class="text-faint">—</span>'}</div>
-      <div class="col-span-2 md:col-span-1 flex flex-wrap items-center gap-1.5">
+      <label class="block min-w-0">${lab('Weight kg')}
+        <input class="cell input !text-base md:!text-sm md:!border-transparent" data-f="weight" type="number" inputmode="decimal" step="0.001" min="0" value="${r.weight ?? ''}" ${dis} aria-label="Weight for ${esc(r.supplier_name)}" /></label>
+      <label class="block min-w-0">${lab('Rate Rs/kg')}
+        <input class="cell input !text-base md:!text-sm md:!border-transparent" data-f="rate" type="number" inputmode="decimal" step="0.01" min="0" value="${r.rate ?? ''}" placeholder="${r.last_rate ?? ''}" ${dis} aria-label="Rate for ${esc(r.supplier_name)}" /></label>
+      <div class="min-w-0 text-right">${lab('Amount')}
+        <div class="tabular-nums font-semibold md:font-medium text-base md:text-sm py-2 md:py-0" data-amount>${r.amount != null ? num(r.amount) : '<span class="text-faint">—</span>'}</div></div>
+      <div class="col-span-3 md:col-span-1 flex flex-wrap items-center gap-1.5">
         ${kh}
-        ${locked ? '' : `<input class="cell input md:!border-transparent !w-28 !text-left" data-f="kharcha" type="number" inputmode="numeric" placeholder="+ kharcha" aria-label="Add kharcha for ${esc(r.supplier_name)}" />
-        <input class="cell input md:!border-transparent !w-12 !text-left" data-f="tag" maxlength="4" placeholder="tag" title="Letter written beside it on paper, e.g. B" aria-label="Tag" />`}
+        ${locked ? '' : `<input class="cell input md:!border-transparent !w-32 md:!w-28 !text-left" data-f="kharcha" type="number" inputmode="numeric" enterkeyhint="done" placeholder="+ kharcha" aria-label="Add kharcha for ${esc(r.supplier_name)}" />
+        <input class="cell input md:!border-transparent !w-14 md:!w-12 !text-left" data-f="tag" maxlength="4" placeholder="tag" title="Letter written beside it on paper, e.g. B" aria-label="Tag" />
+        <button type="button" class="md:hidden btn-ghost !px-3 !py-1.5 text-xs" data-add-k>Add</button>`}
       </div>
       <div class="hidden md:block text-right" data-state>${stateDot(r)}</div>
     </div>`;
@@ -173,7 +181,7 @@ import App from '../layouts/App.astro';
     if (!el) return;
     const r = rows[i];
     el.querySelector('[data-amount]')!.innerHTML = r.amount != null ? num(r.amount) : '<span class="text-faint">—</span>';
-    el.querySelectorAll('[data-state], .md\\:hidden.ml-auto').forEach((s) => (s.innerHTML = stateDot(r)));
+    el.querySelectorAll('[data-state], [data-state-m]').forEach((s) => (s.innerHTML = stateDot(r)));
     tiles();
   }
 
@@ -290,6 +298,15 @@ import App from '../layouts/App.astro';
     all[at + move]?.focus();
   });
 
+  rowsBox.addEventListener('click', (e) => {
+    const add = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-add-k]');
+    if (!add) return;
+    const el = add.closest<HTMLElement>('.row')!;
+    const amount = Number(el.querySelector<HTMLInputElement>('[data-f="kharcha"]')!.value);
+    if (!amount) return toast('Type the kharcha amount first', 'error');
+    save(Number(el.dataset.i), { amount, tag: el.querySelector<HTMLInputElement>('[data-f="tag"]')!.value.trim() || null });
+  });
+
   rowsBox.addEventListener('click', async (e) => {
     const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-del-k]');
     if (!b) return;
@@ -356,5 +373,13 @@ import App from '../layouts/App.astro';
   });
 
   if (!canEdit) $('rate-fill').classList.add('hidden');
+  $('more-btn').addEventListener('click', () => {
+    const box = $('more-tools');
+    const open = box.classList.toggle('hidden') === false;
+    box.classList.toggle('flex', open);
+    box.classList.toggle('flex-col', open);
+    box.classList.toggle('gap-3', open);
+    $('more-btn').setAttribute('aria-expanded', String(open));
+  });
   load();
 </script>

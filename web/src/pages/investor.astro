@@ -28,7 +28,7 @@ import App from '../layouts/App.astro';
       <div>
         <a href="/investors" class="text-sm text-muted hover:text-ink">← Investors</a>
         <h1 class="h-title">${esc(i.name)} ${i.active ? '' : '<span class="chip bg-sunken text-muted">Inactive</span>'}</h1>
-        <p class="text-sm text-muted">${open.map((s: any) => `${esc(s.supplier_name)} ${s.pct}%`).join(' · ') || 'No running khaata'}</p>
+        <p class="text-sm text-muted">${open.length ? `${open.length} running khaata${open.length === 1 ? '' : 's'}` : 'No running khaata'}<span class="hidden md:inline">${open.length ? ': ' + open.map((s: any) => `${esc(s.supplier_name)} ${s.pct}%`).join(' · ') : ''}</span></p>
       </div>
       <div class="flex flex-wrap gap-2">
         <button class="btn-ghost" id="dl">Download Excel</button>
@@ -36,12 +36,12 @@ import App from '../layouts/App.astro';
       </div>
     </div>
 
-    <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+    <div class="grid grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-3">
       ${t('Commission share earned', rs(i.earned), `${d.months.filter((m: any) => m.earned).length} months`)}
       ${t('Paid out', rs(i.paid))}
       ${t('Still to pay', rs(i.payable), 'earned − paid')}
       ${t('Money invested', rs(i.invested), i.withdrawn ? `withdrawn ${rs(i.withdrawn)}` : '')}
-      ${t('Capital in the business', rs(i.capital))}
+      ${t('Capital in the business', rs(i.capital)).replace('class="card card-pad"', 'class="card card-pad hidden lg:block"')}
     </div>
 
     <section class="card card-pad">
@@ -54,19 +54,19 @@ import App from '../layouts/App.astro';
       <section class="card overflow-hidden">
         <div class="card-pad pb-2"><h2 class="font-semibold">Month by month</h2></div>
         <div class="overflow-x-auto max-h-96"><table class="tbl">
-          <thead class="sticky top-0 bg-panel"><tr><th>Month</th><th class="text-right">Khaatas</th><th class="text-right">Their commission</th><th class="text-right">Earned</th><th class="text-right">Paid</th><th class="text-right">Still to pay</th></tr></thead>
+          <thead class="sticky top-0 bg-panel"><tr><th>Month</th><th class="text-right wide-only">Khaatas</th><th class="text-right wide-only">Their commission</th><th class="text-right">Earned</th><th class="text-right">Paid</th><th class="text-right">To pay</th></tr></thead>
           <tbody>${d.months.slice().reverse().map((m: any) => `<tr>
-            <td>${monthName(m.month)}</td><td class="num">${m.khaatas}</td><td class="num text-muted">${num(m.commission)}</td>
+            <td class="nowrap">${monthShort(m.month)}</td><td class="num wide-only">${m.khaatas}</td><td class="num text-muted wide-only">${num(m.commission)}</td>
             <td class="num font-medium">${num(m.earned)}</td><td class="num">${m.paid ? num(m.paid) : ''}</td><td class="num">${num(m.payable_after)}</td></tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted py-6">Nothing yet.</td></tr>'}</tbody>
         </table></div>
       </section>
       <section class="card overflow-hidden">
         <div class="card-pad pb-2"><h2 class="font-semibold">By khaata</h2></div>
         <div class="overflow-x-auto max-h-96"><table class="tbl">
-          <thead class="sticky top-0 bg-panel"><tr><th>Khaata</th><th class="text-right">Months</th><th class="text-right">Earned</th><th class="text-right">Invested</th><th class="text-right">Advance out</th></tr></thead>
+          <thead class="sticky top-0 bg-panel"><tr><th>Khaata</th><th class="text-right wide-only">Months</th><th class="text-right">Earned</th><th class="text-right">Invested</th><th class="text-right wide-only">Advance out</th></tr></thead>
           <tbody>${d.khaatas.map((k: any) => `<tr>
             <td><a class="font-medium hover:text-brand" href="/supplier?id=${k.supplier_id}">${esc(k.supplier_name)}</a></td>
-            <td class="num">${k.months}</td><td class="num font-medium">${num(k.earned)}</td><td class="num">${k.invested ? num(k.invested) : ''}</td><td class="num text-muted">${num(k.advance)}</td></tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-6">No khaatas.</td></tr>'}</tbody>
+            <td class="num wide-only">${k.months}</td><td class="num font-medium">${num(k.earned)}</td><td class="num">${k.invested ? num(k.invested) : ''}</td><td class="num text-muted wide-only">${num(k.advance)}</td></tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-6">No khaatas.</td></tr>'}</tbody>
         </table></div>
       </section>
     </div>
@@ -77,9 +77,9 @@ import App from '../layouts/App.astro';
         <div class="overflow-x-auto"><table class="tbl">
           <thead><tr><th>Khaata</th><th class="text-right">Share</th><th>From</th><th>To</th><th></th></tr></thead>
           <tbody>${d.shares.map((s: any) => `<tr>
-            <td><a class="hover:text-brand" href="/supplier?id=${s.supplier_id}">${esc(s.supplier_name)}</a>${s.note ? `<span class="block text-xs text-muted">${esc(s.note)}</span>` : ''}</td>
-            <td class="num font-medium">${s.pct}%</td><td>${monthShort(s.from_month)}</td><td>${s.to_month ? monthShort(s.to_month) : '<span class="chip bg-good/10 text-good">running</span>'}</td>
-            <td class="text-right whitespace-nowrap">${can('manager') ? `<button class="text-xs text-brand" data-edit-share="${s.id}">Edit</button>` : ''}${can('owner') ? ` · <button class="text-xs text-muted hover:text-bad" data-del-share="${s.id}">Delete</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-6">None.</td></tr>'}</tbody>
+            <td><a class="hover:text-brand" href="/supplier?id=${s.supplier_id}">${esc(s.supplier_name)}</a>${s.note ? `<span class="hidden md:block text-xs text-muted">${esc(s.note)}</span>` : ''}</td>
+            <td class="num font-medium">${s.pct}%</td><td class="nowrap">${monthShort(s.from_month)}</td><td class="nowrap">${s.to_month ? monthShort(s.to_month) : '<span class="chip bg-good/10 text-good">running</span>'}</td>
+            <td class="text-right whitespace-nowrap">${can('manager') ? `<button class="text-xs text-brand" data-edit-share="${s.id}">Edit</button>` : ''}${can('owner') ? `<span class="hidden md:inline"> · <button class="text-xs text-muted hover:text-bad" data-del-share="${s.id}">Delete</button></span>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-6">None.</td></tr>'}</tbody>
         </table></div>
       </section>
       <section class="card overflow-hidden">

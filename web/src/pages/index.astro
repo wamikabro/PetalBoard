@@ -8,11 +8,11 @@ import App from '../layouts/App.astro';
         <p class="text-sm text-muted">Dashboard</p>
         <h1 class="h-title" id="title">&nbsp;</h1>
       </div>
-      <div class="flex items-center gap-2 no-print">
+      <div class="flex flex-wrap items-center gap-2 no-print w-full sm:w-auto">
         <button class="btn-ghost !px-2.5" id="prev" aria-label="Previous month">←</button>
-        <select id="month" class="input !w-44"></select>
+        <select id="month" class="input flex-1 sm:!w-44"></select>
         <button class="btn-ghost !px-2.5" id="next" aria-label="Next month">→</button>
-        <a href="/daily" class="btn-primary">Enter today's flowers</a>
+        <a href="/daily" class="btn-primary w-full sm:w-auto">Enter today's flowers</a>
       </div>
     </div>
 
@@ -45,7 +45,7 @@ import App from '../layouts/App.astro';
           <a class="text-sm text-brand" id="all-bills" href="/bills">All bills →</a>
         </div>
         <div class="overflow-x-auto max-h-[460px]">
-          <table class="tbl"><thead class="sticky top-0 bg-panel"><tr><th>Supplier</th><th class="text-right">kg</th><th class="w-[30%]">Amount</th><th class="text-right">Final</th></tr></thead>
+          <table class="tbl"><thead class="sticky top-0 bg-panel"><tr><th>Supplier</th><th class="text-right">kg</th><th class="w-[30%] wide-only">Amount</th><th class="text-right">Final</th></tr></thead>
           <tbody id="sup"></tbody></table>
         </div>
       </section>
@@ -63,9 +63,9 @@ import App from '../layouts/App.astro';
     </div>
 
     <section class="card overflow-hidden">
-      <div class="card-pad pb-2 flex justify-between items-baseline">
+      <div class="card-pad pb-2 flex flex-wrap justify-between items-baseline gap-1">
         <h2 class="font-semibold">Who owes whom right now</h2>
-        <p class="text-xs text-muted" id="bal-sum"></p>
+        <p class="text-xs text-muted hidden sm:block" id="bal-sum"></p>
       </div>
       <div class="grid md:grid-cols-2 gap-0 md:divide-x divide-line" id="balances"></div>
     </section>
@@ -159,7 +159,7 @@ import App from '../layouts/App.astro';
         <td><a class="font-medium hover:text-brand" href="/bill?id=${b.id}">${esc(b.supplier_name)}</a>
           ${b.flower_name && b.flower_name !== 'Gulab' ? `<span class="chip bg-sunken text-muted ml-1">${esc(b.flower_name)}</span>` : ''}</td>
         <td class="num">${kg(Math.round(b.weight))}</td>
-        <td><div class="flex items-center gap-2"><div class="h-2 rounded-r bg-[var(--series-1)]" style="width:${(b.total / max) * 100}%"></div><span class="text-xs tabular-nums text-muted">${compact(b.total)}</span></div></td>
+        <td class="wide-only"><div class="flex items-center gap-2"><div class="h-2 rounded-r bg-[var(--series-1)]" style="width:${(b.total / max) * 100}%"></div><span class="text-xs tabular-nums text-muted">${compact(b.total)}</span></div></td>
         <td class="num ${b.final < 0 ? 'neg' : 'pos'}">${rsSigned(b.final)}</td>
       </tr>`).join('') || '<tr><td colspan="4" class="text-center text-muted py-8">No bills this month yet.</td></tr>';
 
@@ -167,9 +167,9 @@ import App from '../layouts/App.astro';
       <div class="flex items-center gap-3 py-2 border-b border-line last:border-0">
         <span class="w-2.5 h-2.5 rounded-sm" style="background:${series(flowerSlot(f.flower, rep.flowers))}"></span>
         <span class="font-medium flex-1">${esc(f.flower)}</span>
-        <span class="text-sm text-muted tabular-nums">${kg(Math.round(f.weight))} kg</span>
-        <span class="text-sm tabular-nums w-28 text-right">${rs(f.amount)}</span>
-        <span class="text-xs text-muted tabular-nums w-24 text-right">${f.min_rate}–${f.max_rate}/kg</span>
+        <span class="text-sm text-muted tabular-nums whitespace-nowrap">${kg(Math.round(f.weight))} kg</span>
+        <span class="text-sm tabular-nums text-right whitespace-nowrap">${rs(f.amount)}</span>
+        <span class="hidden sm:inline text-xs text-muted tabular-nums w-24 text-right">${f.min_rate}–${f.max_rate}/kg</span>
       </div>`).join('') || '<p class="text-sm text-muted">Nothing yet.</p>';
 
     document.querySelector('[data-table-for="daily"]')!.innerHTML = `<table class="tbl"><thead><tr><th>Day</th><th class="text-right">kg</th><th class="text-right">Amount</th><th class="text-right">Kharcha</th><th class="text-right">Suppliers</th></tr></thead><tbody>
@@ -178,7 +178,7 @@ import App from '../layouts/App.astro';
     const owe = bal.rows.filter((r: any) => r.balance < 0).sort((a: any, b: any) => a.balance - b.balance);
     const owed = bal.rows.filter((r: any) => r.balance > 0).sort((a: any, b: any) => b.balance - a.balance);
     const list = (title: string, items: any[], cls: string) => `
-      <div class="p-4 sm:p-5 pt-2">
+      <div class="p-3 sm:p-5 pt-2">
         <p class="text-sm font-medium mb-2">${title}</p>
         ${items.slice(0, 8).map((r) => `<a href="/supplier?id=${r.supplier_id}" class="flex justify-between py-1.5 text-sm border-b border-line/60 last:border-0 hover:text-brand">
           <span>${esc(r.name)} <span class="text-xs text-muted">${r.last_status === 'open' ? '· open' : ''}</span></span><span class="tabular-nums ${cls}">${rs(Math.abs(r.balance))}</span></a>`).join('') || '<p class="text-sm text-muted">Nobody.</p>'}

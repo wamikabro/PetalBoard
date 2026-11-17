@@ -15,16 +15,20 @@ import App from '../layouts/App.astro';
       </div>
     </div>
 
-    <div id="strip" class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3"></div>
+    <div id="strip" class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2 sm:gap-3"></div>
 
-    <div class="card card-pad flex flex-col md:flex-row gap-3 md:items-end">
-      <div class="flex-1"><label class="label" for="q">Search</label><input id="q" class="input" placeholder="Supplier name" /></div>
+    <div class="flex gap-2 md:hidden">
+      <input id="q-m" class="input" type="search" placeholder="Find supplier…" />
+      <button class="btn-ghost" id="filters-btn" aria-expanded="false">Filters</button>
+    </div>
+    <div class="card card-pad hidden md:flex flex-col md:flex-row gap-3 md:items-end" id="filters">
+      <div class="flex-1 hidden md:block"><label class="label" for="q">Search</label><input id="q" class="input" placeholder="Supplier name" /></div>
       <div><label class="label" for="status">Status</label>
         <select id="status" class="input"><option value="">All</option><option value="open">Open</option><option value="closed">Closed</option></select></div>
       <div><label class="label" for="flower">Flower</label><select id="flower" class="input"><option value="">All</option></select></div>
       <div><label class="label" for="bal">Balance</label>
         <select id="bal" class="input"><option value="">All</option><option value="neg">Supplier owes shop</option><option value="pos">Shop owes supplier</option></select></div>
-      <div class="flex flex-wrap gap-2">
+      <div class="grid grid-cols-2 sm:flex flex-wrap gap-2">
         <button class="btn-ghost" id="csv">Export CSV</button>
         <a class="btn-ghost" id="print-all" href="/print">Print all bills</a>
         <button class="btn-ghost hidden" id="new-bill">New bill</button>
@@ -32,7 +36,8 @@ import App from '../layouts/App.astro';
       </div>
     </div>
 
-    <div class="card overflow-x-auto">
+    <div id="cards" class="md:hidden space-y-2"></div>
+    <div class="card overflow-x-auto hidden md:block">
       <table class="tbl min-w-[900px]">
         <thead><tr id="head"></tr></thead>
         <tbody id="body"></tbody>
@@ -59,7 +64,7 @@ import App from '../layouts/App.astro';
   ];
 
   function filtered() {
-    const q = $<HTMLInputElement>('q').value.trim().toLowerCase();
+    const q = ($<HTMLInputElement>('q').value || $<HTMLInputElement>('q-m').value).trim().toLowerCase();
     const st = $<HTMLSelectElement>('status').value, fl = $<HTMLSelectElement>('flower').value, bl = $<HTMLSelectElement>('bal').value;
     return bills
       .filter((b) => (!q || b.supplier_name.toLowerCase().includes(q)) && (!st || b.status === st) && (!fl || b.flower_name === fl)
@@ -89,6 +94,19 @@ import App from '../layouts/App.astro';
         <td><span class="chip ${b.status === 'closed' ? 'bg-sunken text-muted' : 'bg-good/10 text-good'}">${b.status === 'closed' ? 'Closed' : 'Open'}</span></td>
         <td class="text-right whitespace-nowrap"><a class="text-brand text-sm" href="/bill?id=${b.id}">Open</a> · <a class="text-brand text-sm" href="/bill?id=${b.id}&tab=edit">Edit</a></td>
       </tr>`).join('') || `<tr><td colspan="12" class="text-center text-muted py-10">No bills for ${monthName(month)} yet.${can('manager') ? ' Use “Start month for everyone” or enter flowers on the Daily entry page.' : ''}</td></tr>`;
+    $('cards').innerHTML = rows.map((b) => `
+      <a href="/bill?id=${b.id}" class="card block p-3 active:bg-sunken">
+        <div class="flex items-center gap-2">
+          <span class="font-semibold truncate flex-1">${esc(b.supplier_name)}</span>
+          ${b.flower_name && b.flower_name !== 'Gulab' ? `<span class="chip bg-sunken text-muted">${esc(b.flower_name)}</span>` : ''}
+          ${b.status === 'closed' ? '<span class="chip bg-sunken text-muted">Closed</span>' : ''}
+        </div>
+        <div class="mt-1.5 flex items-end justify-between gap-2">
+          <div class="text-xs text-muted leading-relaxed">${kg(b.weight)} kg · ${b.days_supplied} days<br />Total ${num(b.total)} · Kharcha ${num(b.kharcha)}</div>
+          <div class="text-right"><div class="font-semibold tabular-nums ${b.final < 0 ? 'neg' : 'pos'}">${rsSigned(b.final)}</div>
+            <div class="text-[11px] text-muted">${b.final < 0 ? 'Supplier owes' : b.final > 0 ? 'Shop owes' : 'Settled'}</div></div>
+        </div>
+      </a>`).join('') || `<p class="text-center text-muted text-sm py-8">No bills for ${monthName(month)} yet.</p>`;
     const sum = (k: string) => rows.reduce((s, b) => s + (b[k] || 0), 0);
     $('foot').innerHTML = rows.length ? `<tr class="font-semibold bg-sunken/60">
       <td class="px-3 py-2">${rows.length} bills</td><td></td><td></td><td class="px-3 py-2 num">${kg(Math.round(sum('weight')))}</td>
@@ -96,10 +114,10 @@ import App from '../layouts/App.astro';
       <td class="px-3 py-2 num">${num(sum('kharcha'))}</td><td class="px-3 py-2 num">${num(sum('opening_due'))}</td><td class="px-3 py-2 num">${rsSigned(sum('final'))}</td><td colspan="2"></td></tr>` : '';
 
     const all = bills;
-    const tile = (l: string, v: string) => `<div class="card card-pad"><p class="stat-label">${l}</p><p class="stat-value !text-xl">${v}</p></div>`;
+    const tile = (l: string, v: string) => `<div class="card card-pad"><p class="stat-label">${l}</p><p class="stat-value sm:!text-xl">${v}</p></div>`;
     const s = (k: string) => all.reduce((x, b) => x + (b[k] || 0), 0);
-    $('strip').innerHTML = tile('Bills', `${all.length}`) + tile('Flowers', `${compact(Math.round(s('weight')))} kg`) + tile('Total', 'Rs ' + compact(s('total')))
-      + tile('Commission', 'Rs ' + compact(s('commission'))) + tile('Kharcha', 'Rs ' + compact(s('kharcha')))
+    $('strip').innerHTML = tile('Bills', `${all.length}`) + tile('Flowers', `${compact(Math.round(s('weight')))} kg`).replace('class="card card-pad"', 'class="card card-pad hidden md:block"') + tile('Total', 'Rs ' + compact(s('total')))
+      + tile('Commission', 'Rs ' + compact(s('commission'))).replace('class="card card-pad"', 'class="card card-pad hidden md:block"') + tile('Kharcha', 'Rs ' + compact(s('kharcha'))).replace('class="card card-pad"', 'class="card card-pad hidden md:block"')
       + tile('Suppliers owe', rs(-all.filter((b) => b.final < 0).reduce((x, b) => x + b.final, 0)))
       + tile('Shop owes', rs(all.filter((b) => b.final > 0).reduce((x, b) => x + b.final, 0)));
   }
@@ -124,7 +142,13 @@ import App from '../layouts/App.astro';
     else { sortKey = b.dataset.sort!; sortDir = ['supplier_name', 'flower_name', 'status'].includes(sortKey) ? 1 : -1; }
     render();
   });
-  ['q', 'status', 'flower', 'bal'].forEach((id) => $(id).addEventListener('input', render));
+  ['q', 'q-m', 'status', 'flower', 'bal'].forEach((id) => $(id).addEventListener('input', render));
+  $('filters-btn').addEventListener('click', () => {
+    const f = $('filters');
+    const open = f.classList.toggle('hidden') === false;
+    f.classList.toggle('flex', open);
+    $('filters-btn').setAttribute('aria-expanded', String(open));
+  });
   $<HTMLInputElement>('month').addEventListener('change', (e) => { const v = (e.target as HTMLInputElement).value; if (v) { month = v; load(); } });
   $('prev').addEventListener('click', () => { month = shiftMonth(month, -1); load(); });
   $('next').addEventListener('click', () => { month = shiftMonth(month, 1); load(); });

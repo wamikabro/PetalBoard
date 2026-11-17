@@ -37,12 +37,12 @@ import App from '../layouts/App.astro';
         ${d.position.last_bill ? `<a class="btn-primary" href="/bill?id=${d.position.last_bill.id}">Latest bill</a>` : ''}
       </div>
     </div>
-    <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+    <div class="grid grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-3">
       <div class="card card-pad"><p class="stat-label">Balance now</p><p class="stat-value ${p.balance < 0 ? 'neg' : p.balance > 0 ? 'pos' : ''}">${rsSigned(p.balance)}</p><p class="text-xs text-muted">${balanceWords(p.balance)}</p></div>
       <div class="card card-pad"><p class="stat-label">Advance outstanding</p><p class="stat-value">${rs(p.advance)}</p></div>
       <div class="card card-pad"><p class="stat-label">Flowers, all time</p><p class="stat-value">${compact(Math.round(lifetime.w))} kg</p><p class="text-xs text-muted">${d.bills.length} month(s)</p></div>
       <div class="card card-pad"><p class="stat-label">Bought, all time</p><p class="stat-value">Rs ${compact(lifetime.t)}</p></div>
-      <div class="card card-pad"><p class="stat-label">Commission earned</p><p class="stat-value">Rs ${compact(lifetime.c)}</p></div>
+      <div class="card card-pad hidden lg:block"><p class="stat-label">Commission earned</p><p class="stat-value">Rs ${compact(lifetime.c)}</p></div>
     </div>`;
   }
 
@@ -68,15 +68,15 @@ import App from '../layouts/App.astro';
 
     <section class="card overflow-hidden">
       <div class="card-pad pb-2"><h2 class="font-semibold">Bills</h2></div>
-      <div class="overflow-x-auto"><table class="tbl min-w-[760px]">
-        <thead><tr><th>Month</th><th class="text-right">Days</th><th class="text-right">kg</th><th class="text-right">Total</th><th class="text-right">Commission</th><th class="text-right">Kharcha</th><th class="text-right">B/F</th><th class="text-right">Final</th><th>Status</th><th></th></tr></thead>
+      <div class="overflow-x-auto"><table class="tbl md:min-w-[760px]">
+        <thead><tr><th>Month</th><th class="text-right wide-only">Days</th><th class="text-right">kg</th><th class="text-right wide-only">Total</th><th class="text-right wide-only">Commission</th><th class="text-right wide-only">Kharcha</th><th class="text-right wide-only">B/F</th><th class="text-right">Final</th><th class="wide-only">Status</th><th class="wide-only"></th></tr></thead>
         <tbody>${d.bills.map((b: any) => `<tr class="hover:bg-sunken/50">
-          <td><a class="font-medium hover:text-brand" href="/bill?id=${b.id}">${monthName(b.month)}</a></td>
-          <td class="num">${b.days_supplied}</td><td class="num">${kg(b.weight)}</td><td class="num">${num(b.total)}</td>
-          <td class="num text-muted">${num(b.commission)}</td><td class="num">${num(b.kharcha)}</td><td class="num text-muted">${b.opening_due ? num(b.opening_due) : ''}</td>
+          <td class="nowrap"><a class="font-medium hover:text-brand" href="/bill?id=${b.id}">${monthShort(b.month)}</a></td>
+          <td class="num wide-only">${b.days_supplied}</td><td class="num">${kg(b.weight)}</td><td class="num wide-only">${num(b.total)}</td>
+          <td class="num text-muted wide-only">${num(b.commission)}</td><td class="num wide-only">${num(b.kharcha)}</td><td class="num text-muted wide-only">${b.opening_due ? num(b.opening_due) : ''}</td>
           <td class="num font-semibold ${b.final < 0 ? 'neg' : 'pos'}">${rsSigned(b.final)}</td>
-          <td><span class="chip ${b.status === 'closed' ? 'bg-sunken text-muted' : 'bg-good/10 text-good'}">${b.status}</span>${b.status === 'closed' && b.carried ? `<span class="text-xs text-muted ml-1">carried ${rsSigned(b.carried)}</span>` : ''}</td>
-          <td class="text-right"><a href="/bill?id=${b.id}" class="text-brand text-sm">Open</a></td></tr>`).join('') || '<tr><td colspan="10" class="text-center text-muted py-8">No bills yet.</td></tr>'}</tbody>
+          <td class="wide-only"><span class="chip ${b.status === 'closed' ? 'bg-sunken text-muted' : 'bg-good/10 text-good'}">${b.status}</span>${b.status === 'closed' && b.carried ? `<span class="text-xs text-muted ml-1">carried ${rsSigned(b.carried)}</span>` : ''}</td>
+          <td class="text-right wide-only"><a href="/bill?id=${b.id}" class="text-brand text-sm">Open</a></td></tr>`).join('') || '<tr><td colspan="10" class="text-center text-muted py-8">No bills yet.</td></tr>'}</tbody>
       </table></div>
     </section>
 
@@ -115,10 +115,10 @@ import App from '../layouts/App.astro';
       <div class="card-pad pb-2"><h2 class="font-semibold">Investors in this khaata</h2>
         <p class="text-xs text-muted">Their share of the commission this khaata earns</p></div>
       <div class="overflow-x-auto"><table class="tbl">
-        <thead><tr><th>Investor</th><th class="text-right">Share</th><th>From</th><th>To</th><th class="text-right">Earned from this khaata</th></tr></thead>
+        <thead><tr><th>Investor</th><th class="text-right">Share</th><th>From</th><th>To</th><th class="text-right">Earned</th></tr></thead>
         <tbody>${d.shares.map((x: any) => `<tr>
           <td><a class="font-medium hover:text-brand" href="/investor?id=${x.investor_id}">${esc(x.investor_name)}</a></td>
-          <td class="num">${x.pct}%</td><td>${monthShort(x.from_month)}</td><td>${x.to_month ? monthShort(x.to_month) : 'running'}</td>
+          <td class="num">${x.pct}%</td><td class="nowrap">${monthShort(x.from_month)}</td><td class="nowrap">${x.to_month ? monthShort(x.to_month) : 'running'}</td>
           <td class="num">${rs(d.investor_earnings.filter((r: any) => r.investor_id === x.investor_id && r.month >= x.from_month && (!x.to_month || r.month <= x.to_month)).reduce((s: number, r: any) => s + r.earned, 0))}</td></tr>`).join('')}</tbody>
       </table></div>
     </section>`;

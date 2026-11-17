@@ -19,7 +19,7 @@ import App from '../layouts/App.astro';
         <div><label class="label" for="flower">Flower</label><select id="flower" class="input"><option value="">All</option></select></div>
         <div><label class="label" for="group">Show</label>
           <select id="group" class="input"><option value="day">Total per day</option><option value="supplier">Total per supplier</option><option value="month">Total per month</option><option value="flower">Total per flower</option><option value="none">Every entry</option></select></div>
-        <div class="flex gap-2"><button class="btn-ghost flex-1" id="csv">CSV</button><button class="btn-primary flex-1" id="print">Print / PDF</button></div>
+        <div class="flex gap-2 col-span-2 md:col-span-1"><button class="btn-ghost flex-1" id="csv">CSV</button><button class="btn-primary flex-1" id="print">Print / PDF</button></div>
       </div>
       <div class="mt-3 flex flex-wrap gap-2 text-xs" id="quick">
         <span class="text-muted self-center">Quick:</span>
@@ -50,6 +50,9 @@ import App from '../layouts/App.astro';
   let themed = false;
   let sortKey = 0, sortDir = 1;
 
+  // Columns hidden on phones (they stay in the CSV).
+  const WIDE = ['Suppliers', 'Days', 'Commission (10%)', 'Flower', 'Rate', 'Avg rate'];
+  const shortDate = (iso: string) => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' });
   const lastDay = (m: string) => { const [y, mo] = m.split('-').map(Number); return `${m}-${String(new Date(y, mo, 0).getDate()).padStart(2, '0')}`; };
 
   function quick(q: string) {
@@ -97,20 +100,20 @@ import App from '../layouts/App.astro';
     const from = $<HTMLInputElement>('from').value, to = $<HTMLInputElement>('to').value;
     const sup = $<HTMLSelectElement>('sup'), fl = $<HTMLSelectElement>('flower');
     const tile = (l: string, v: string) => `<div class="card card-pad"><p class="stat-label">${l}</p><p class="stat-value !text-xl">${v}</p></div>`;
-    const fmt = (v: any, i: number) => v === null || v === undefined ? '' : g.num[i] ? (header[i] === 'kg' ? kg(v) : num(v)) : header[i] === 'Date' ? v : header[i] === 'Month' ? monthName(v) : esc(v);
+    const fmt = (v: any, i: number) => v === null || v === undefined ? '' : g.num[i] ? (header[i] === 'kg' ? kg(v) : num(v)) : header[i] === 'Date' ? shortDate(v) : header[i] === 'Month' ? monthShort(v) : esc(v);
     out.innerHTML = `
       <div class="hidden print:block mb-2"><h2 class="text-lg font-semibold">Purchases ${prettyDate(from)} – ${prettyDate(to)}</h2>
         <p class="text-sm">${sup.value ? 'Supplier: ' + esc(sup.selectedOptions[0].text) + ' · ' : ''}${fl.value ? 'Flower: ' + esc(fl.selectedOptions[0].text) : ''}</p></div>
-      <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-        ${tile('Days with flowers', String(t.days))}${tile('Suppliers', String(t.suppliers))}${tile('Flowers', compact(Math.round(t.weight)) + ' kg')}
+      <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 sm:gap-3">
+        ${tile('Days with flowers', String(t.days)).replace('class="card card-pad"', 'class="card card-pad hidden md:block"')}${tile('Suppliers', String(t.suppliers)).replace('class="card card-pad"', 'class="card card-pad hidden md:block"')}${tile('Flowers', compact(Math.round(t.weight)) + ' kg')}
         ${tile('Amount', 'Rs ' + compact(t.amount))}${tile('Average rate', t.avg_rate ? 'Rs ' + Math.round(t.avg_rate) + '/kg' : '—')}${tile('Kharcha', 'Rs ' + compact(t.kharcha))}
       </div>
       ${$<HTMLSelectElement>('group').value !== 'none' && rows.length > 1 ? `<section class="card card-pad no-print"><div class="h-56"><canvas id="c-rep"></canvas></div></section>` : ''}
       <div class="card overflow-x-auto">
         <table class="tbl">
-          <thead><tr>${header.map((h, i) => `<th class="${g.num[i] ? 'text-right' : ''}"><button data-sort="${i}" class="hover:text-ink">${h}${sortKey === i ? (sortDir > 0 ? ' ↑' : ' ↓') : ''}</button></th>`).join('')}</tr></thead>
-          <tbody>${rows.slice(0, 2000).map((r) => `<tr>${r.map((v, i) => `<td class="${g.num[i] ? 'num' : ''}">${fmt(v, i)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${header.length}" class="text-center text-muted py-10">Nothing in this range.</td></tr>`}</tbody>
-          ${rows.length ? `<tfoot><tr class="font-semibold bg-sunken/60">${header.map((h, i) => `<td class="px-3 py-2 ${g.num[i] ? 'num' : ''}">${i === 0 ? `${rows.length} rows` : ['kg', 'Amount', 'Kharcha', 'Commission (10%)'].includes(h) ? (h === 'kg' ? kg(Math.round(rows.reduce((s, r) => s + (r[i] || 0), 0))) : num(rows.reduce((s, r) => s + (r[i] || 0), 0))) : ''}</td>`).join('')}</tr></tfoot>` : ''}
+          <thead><tr>${header.map((h, i) => `<th class="${g.num[i] ? 'text-right' : ''} ${WIDE.includes(h) ? 'wide-only' : ''}"><button data-sort="${i}" class="hover:text-ink">${h}${sortKey === i ? (sortDir > 0 ? ' ↑' : ' ↓') : ''}</button></th>`).join('')}</tr></thead>
+          <tbody>${rows.slice(0, 2000).map((r) => `<tr>${r.map((v, i) => `<td class="${g.num[i] ? 'num' : 'nowrap'} ${WIDE.includes(header[i]) ? 'wide-only' : ''}">${fmt(v, i)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${header.length}" class="text-center text-muted py-10">Nothing in this range.</td></tr>`}</tbody>
+          ${rows.length ? `<tfoot><tr class="font-semibold bg-sunken/60">${header.map((h, i) => `<td class="px-3 py-2 ${g.num[i] ? 'num' : ''} ${WIDE.includes(h) ? 'wide-only' : ''}">${i === 0 ? `${rows.length} rows` : ['kg', 'Amount', 'Kharcha', 'Commission (10%)'].includes(h) ? (h === 'kg' ? kg(Math.round(rows.reduce((s, r) => s + (r[i] || 0), 0))) : num(rows.reduce((s, r) => s + (r[i] || 0), 0))) : ''}</td>`).join('')}</tr></tfoot>` : ''}
         </table>
         ${rows.length > 2000 ? '<p class="p-3 text-xs text-muted">Showing the first 2,000 rows. CSV has them all.</p>' : ''}
       </div>`;
@@ -135,7 +138,7 @@ import App from '../layouts/App.astro';
     header = ['Supplier', 'Balance', 'Who owes', 'Advance', 'Last bill', 'Status'];
     rows = list.map((r: any) => [r.name, r.balance, r.balance > 0 ? 'Shop owes supplier' : r.balance < 0 ? 'Supplier owes shop' : '', r.advance, r.last_month, r.last_status]);
     out.innerHTML = `
-      <div class="grid grid-cols-3 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
         <div class="card card-pad"><p class="stat-label">Suppliers owe the shop</p><p class="stat-value neg">${rs(b.receivable)}</p></div>
         <div class="card card-pad"><p class="stat-label">Shop owes suppliers</p><p class="stat-value pos">${rs(b.payable)}</p></div>
         <div class="card card-pad"><p class="stat-label">Advances given out</p><p class="stat-value">${rs(b.advances)}</p></div>

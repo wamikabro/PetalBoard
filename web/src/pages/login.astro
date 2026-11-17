@@ -2,30 +2,33 @@
 import App from '../layouts/App.astro';
 ---
 <App title="Log in" bare>
-  <div class="min-h-screen grid lg:grid-cols-2">
-    <div class="hidden lg:flex flex-col justify-between p-12 text-white" style="background: linear-gradient(135deg, #1e3a8a 0%, #4c2a85 40%, #9d2668 100%);">
-      <div class="flex items-center gap-3"><img src="/favicon.svg" alt="" class="w-10 h-10" /><span class="text-xl font-semibold">PetalBoard</span></div>
-      <div>
-        <p class="urdu text-5xl font-bold text-[#ffd21f] leading-[1.8]" style="-webkit-text-stroke:1px #3a1a00">توقیر احمد فلاور ہاؤس</p>
-        <p class="mt-4 text-lg text-white/80 max-w-md">Daily flower purchases, supplier bills and month-end settlement, all in one place.</p>
+  <div class="min-h-[100dvh] flex flex-col items-center justify-center px-5 py-10"
+       style="background: radial-gradient(120% 80% at 50% 0%, rgb(var(--brand) / .18), transparent 60%), rgb(var(--surface));">
+    <form id="login" class="w-full max-w-[360px]">
+      <div class="flex flex-col items-center text-center mb-7">
+        <img src="/favicon.svg" alt="" class="w-16 h-16 rounded-2xl shadow-lg shadow-brand/20" />
+        <h1 class="mt-4 text-2xl font-semibold tracking-tight">PetalBoard</h1>
+        <p class="mt-1 text-sm text-muted">Enter your password to continue</p>
       </div>
-      <p class="text-sm text-white/60">Pakistan Chowk, Hyderabad</p>
-    </div>
-    <div class="flex items-center justify-center p-6">
-      <form id="login" class="w-full max-w-sm space-y-5">
-        <div class="lg:hidden flex items-center gap-2 mb-6"><img src="/favicon.svg" alt="" class="w-9 h-9" /><span class="text-xl font-semibold">PetalBoard</span></div>
+
+      <div class="card p-5 shadow-xl shadow-black/5 space-y-4">
         <div>
-          <h1 class="h-title">Welcome back</h1>
-          <p class="text-sm text-muted mt-1">Enter your password. This device stays logged in.</p>
-        </div>
-        <div>
-          <label class="label" for="password">Password</label>
-          <input class="input !text-lg tracking-wide" id="password" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus />
+          <label class="sr-only" for="password">Password</label>
+          <div class="relative">
+            <input class="input !h-12 !text-lg !pr-12 tracking-wide" id="password" name="password" type="password"
+                   placeholder="Password" autocomplete="current-password" autocapitalize="none" autocorrect="off"
+                   spellcheck="false" enterkeyhint="go" required autofocus />
+            <button type="button" id="show" class="absolute inset-y-0 right-0 w-12 grid place-items-center text-muted hover:text-ink" aria-label="Show password">
+              <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M12 5c-5 0-9 4.5-10 7 1 2.5 5 7 10 7s9-4.5 10-7c-1-2.5-5-7-10-7zm0 11.5A4.5 4.5 0 1 1 12 7.5a4.5 4.5 0 0 1 0 9zm0-7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z" /></svg>
+            </button>
+          </div>
         </div>
         <p id="err" class="text-sm text-bad hidden" role="alert"></p>
-        <button class="btn-primary w-full !py-2.5" type="submit">Log in</button>
-      </form>
-    </div>
+        <button class="btn-primary w-full !h-12 !text-base" type="submit">Log in</button>
+      </div>
+
+      <p class="mt-5 text-center text-xs text-muted">This device stays logged in after the first time.</p>
+    </form>
   </div>
 </App>
 
@@ -33,14 +36,19 @@ import App from '../layouts/App.astro';
   import { api, saveLogin } from '../lib/api';
   const form = document.getElementById('login') as HTMLFormElement;
   const err = document.getElementById('err')!;
+  const pw = document.getElementById('password') as HTMLInputElement;
+  document.getElementById('show')!.addEventListener('click', () => {
+    pw.type = pw.type === 'password' ? 'text' : 'password';
+    pw.focus();
+  });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const btn = form.querySelector('button')!;
+    const btn = form.querySelector<HTMLButtonElement>('button[type=submit]')!;
     btn.disabled = true;
+    btn.textContent = 'Logging in…';
     err.classList.add('hidden');
     try {
-      const fd = new FormData(form);
-      const r = await api('/auth/login', { method: 'POST', body: { password: fd.get('password') } });
+      const r = await api('/auth/login', { method: 'POST', body: { password: pw.value } });
       saveLogin(r.token, r.user);
       const next = new URLSearchParams(location.search).get('next');
       location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
@@ -48,6 +56,8 @@ import App from '../layouts/App.astro';
       err.textContent = ex.message;
       err.classList.remove('hidden');
       btn.disabled = false;
+      btn.textContent = 'Log in';
+      pw.select();
     }
   });
 </script>
