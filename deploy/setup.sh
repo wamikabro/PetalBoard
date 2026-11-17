@@ -85,6 +85,16 @@ for port in 80 443; do
 done
 netfilter-persistent save >/dev/null
 
+# --- network: Oracle VMs use 9000-byte packets, which stall larger replies on the way to most
+#     home and mobile connections. Use the normal 1500, and clamp TCP segments for smaller links. ---
+NIC=$(ip -o -4 route show default | awk '{print $5}' | head -1)
+ip link set "$NIC" mtu 1500
+for f in /etc/netplan/*.yaml; do sed -i -E 's/^(\s*mtu:\s*)9000/\11500/' "$f"; done
+echo "network: {config: disabled}" > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+iptables -t mangle -C POSTROUTING -o "$NIC" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1360 2>/dev/null ||
+  iptables -t mangle -A POSTROUTING -o "$NIC" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1360
+netfilter-persistent save >/dev/null
+
 # --- daily backup at 02:30, keep 30 days ---
 install -m 755 "$APP/deploy/backup.sh" /usr/local/bin/petalboard-backup
 echo "30 2 * * * root /usr/local/bin/petalboard-backup" > /etc/cron.d/petalboard-backup

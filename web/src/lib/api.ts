@@ -1,5 +1,7 @@
 // Talks to the FastAPI backend. The login token lives in localStorage.
-export const API_URL: string = (import.meta.env.PUBLIC_API_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+// The live API on the Oracle server. PUBLIC_API_URL (web/.env) overrides it, e.g. http://127.0.0.1:8000 for local dev.
+const PRODUCTION_API = 'https://api.129.213.60.139.sslip.io';
+export const API_URL: string = (import.meta.env.PUBLIC_API_URL || PRODUCTION_API).replace(/\/$/, '');
 
 const TOKEN_KEY = 'petalboard_token';
 const USER_KEY = 'petalboard_user';
@@ -48,15 +50,20 @@ export async function api<T = any>(
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+  const method = opts.method || 'GET';
+  const send = () => fetch(url, { method, headers, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
   let res: Response;
   try {
-    res = await fetch(url, {
-      method: opts.method || 'GET',
-      headers,
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
+    res = await send();
   } catch {
-    throw new ApiError(0, 'Cannot reach the server. Check the internet connection.');
+    // A dropped connection: try reads once more. Saves are not repeated, so nothing is entered twice.
+    if (method !== 'GET') throw new ApiError(0, 'Cannot reach the server. Check the internet connection and try again.');
+    try {
+      await new Promise((r) => setTimeout(r, 800));
+      res = await send();
+    } catch {
+      throw new ApiError(0, 'Cannot reach the server. Check the internet connection.');
+    }
   }
   if (res.status === 401 && !path.startsWith('/auth/login')) {
     clearLogin();
