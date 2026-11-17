@@ -1,0 +1,11 @@
+{
+  // Cloudflare Worker that serves the built app (dist/) as static assets.
+  // Deploy: npm run deploy   (needs `npx wrangler login` once)
+  "name": "petalboard",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page",
+    "html_handling": "drop-trailing-slash"
+  }
+}

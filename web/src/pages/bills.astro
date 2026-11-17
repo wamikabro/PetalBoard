@@ -1,0 +1,172 @@
+---
+import App from '../layouts/App.astro';
+---
+<App title="Bills" active="bills" wide>
+  <div class="space-y-4">
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <p class="text-sm text-muted">Monthly bills</p>
+        <h1 class="h-title" id="title">&nbsp;</h1>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button class="btn-ghost !px-2.5" id="prev" aria-label="Previous month">←</button>
+        <input type="month" id="month" class="input !w-44" />
+        <button class="btn-ghost !px-2.5" id="next" aria-label="Next month">→</button>
+      </div>
+    </div>
+
+    <div id="strip" class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3"></div>
+
+    <div class="card card-pad flex flex-col md:flex-row gap-3 md:items-end">
+      <div class="flex-1"><label class="label" for="q">Search</label><input id="q" class="input" placeholder="Supplier name" /></div>
+      <div><label class="label" for="status">Status</label>
+        <select id="status" class="input"><option value="">All</option><option value="open">Open</option><option value="closed">Closed</option></select></div>
+      <div><label class="label" for="flower">Flower</label><select id="flower" class="input"><option value="">All</option></select></div>
+      <div><label class="label" for="bal">Balance</label>
+        <select id="bal" class="input"><option value="">All</option><option value="neg">Supplier owes shop</option><option value="pos">Shop owes supplier</option></select></div>
+      <div class="flex flex-wrap gap-2">
+        <button class="btn-ghost" id="csv">Export CSV</button>
+        <a class="btn-ghost" id="print-all" href="/print">Print all bills</a>
+        <button class="btn-ghost hidden" id="new-bill">New bill</button>
+        <button class="btn-primary hidden" id="start">Start month for everyone</button>
+      </div>
+    </div>
+
+    <div class="card overflow-x-auto">
+      <table class="tbl min-w-[900px]">
+        <thead><tr id="head"></tr></thead>
+        <tbody id="body"></tbody>
+        <tfoot id="foot"></tfoot>
+      </table>
+    </div>
+  </div>
+</App>
+
+<script>
+  import { api, can } from '../lib/api';
+  import { compact, esc, kg, monthName, num, rs, rsSigned, shiftMonth, thisMonth } from '../lib/format';
+  import { busy, dialog, qp, setQuery, toast } from '../lib/ui';
+
+  const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+  let month = qp('month') || '';
+  let bills: any[] = [];
+  let sortKey = 'supplier_name', sortDir = 1;
+
+  const cols: [string, string, boolean][] = [
+    ['supplier_name', 'Supplier', false], ['flower_name', 'Flower', false], ['days_supplied', 'Days', true], ['weight', 'kg', true],
+    ['total', 'Total', true], ['commission', 'Commission', true], ['net', 'Net', true], ['kharcha', 'Kharcha', true],
+    ['opening_due', 'B/F', true], ['final', 'Final', true], ['status', 'Status', false],
+  ];
+
+  function filtered() {
+    const q = $<HTMLInputElement>('q').value.trim().toLowerCase();
+    const st = $<HTMLSelectElement>('status').value, fl = $<HTMLSelectElement>('flower').value, bl = $<HTMLSelectElement>('bal').value;
+    return bills
+      .filter((b) => (!q || b.supplier_name.toLowerCase().includes(q)) && (!st || b.status === st) && (!fl || b.flower_name === fl)
+        && (!bl || (bl === 'neg' ? b.final < 0 : b.final > 0)))
+      .sort((a, b) => {
+        const x = a[sortKey], y = b[sortKey];
+        return (typeof x === 'string' ? String(x).localeCompare(String(y)) : (x ?? 0) - (y ?? 0)) * sortDir;
+      });
+  }
+
+  function render() {
+    $('head').innerHTML = cols.map(([k, label, n]) =>
+      `<th class="${n ? 'text-right' : ''}"><button data-sort="${k}" class="hover:text-ink ${sortKey === k ? 'text-ink' : ''}">${label}${sortKey === k ? (sortDir > 0 ? ' ↑' : ' ↓') : ''}</button></th>`).join('') + '<th></th>';
+    const rows = filtered();
+    $('body').innerHTML = rows.map((b) => `
+      <tr class="hover:bg-sunken/50">
+        <td><a href="/bill?id=${b.id}" class="font-medium hover:text-brand">${esc(b.supplier_name)}</a></td>
+        <td class="text-muted">${esc(b.flower_name || '')}</td>
+        <td class="num">${b.days_supplied}</td>
+        <td class="num">${kg(b.weight)}</td>
+        <td class="num">${num(b.total)}</td>
+        <td class="num text-muted">${num(b.commission)}</td>
+        <td class="num">${num(b.net)}</td>
+        <td class="num">${num(b.kharcha)}</td>
+        <td class="num text-muted">${b.opening_due ? num(b.opening_due) : ''}</td>
+        <td class="num font-semibold ${b.final < 0 ? 'neg' : 'pos'}">${rsSigned(b.final)}</td>
+        <td><span class="chip ${b.status === 'closed' ? 'bg-sunken text-muted' : 'bg-good/10 text-good'}">${b.status === 'closed' ? 'Closed' : 'Open'}</span></td>
+        <td class="text-right whitespace-nowrap"><a class="text-brand text-sm" href="/bill?id=${b.id}">Open</a> · <a class="text-brand text-sm" href="/bill?id=${b.id}&tab=edit">Edit</a></td>
+      </tr>`).join('') || `<tr><td colspan="12" class="text-center text-muted py-10">No bills for ${monthName(month)} yet.${can('manager') ? ' Use “Start month for everyone” or enter flowers on the Daily entry page.' : ''}</td></tr>`;
+    const sum = (k: string) => rows.reduce((s, b) => s + (b[k] || 0), 0);
+    $('foot').innerHTML = rows.length ? `<tr class="font-semibold bg-sunken/60">
+      <td class="px-3 py-2">${rows.length} bills</td><td></td><td></td><td class="px-3 py-2 num">${kg(Math.round(sum('weight')))}</td>
+      <td class="px-3 py-2 num">${num(sum('total'))}</td><td class="px-3 py-2 num">${num(sum('commission'))}</td><td class="px-3 py-2 num">${num(sum('net'))}</td>
+      <td class="px-3 py-2 num">${num(sum('kharcha'))}</td><td class="px-3 py-2 num">${num(sum('opening_due'))}</td><td class="px-3 py-2 num">${rsSigned(sum('final'))}</td><td colspan="2"></td></tr>` : '';
+
+    const all = bills;
+    const tile = (l: string, v: string) => `<div class="card card-pad"><p class="stat-label">${l}</p><p class="stat-value !text-xl">${v}</p></div>`;
+    const s = (k: string) => all.reduce((x, b) => x + (b[k] || 0), 0);
+    $('strip').innerHTML = tile('Bills', `${all.length}`) + tile('Flowers', `${compact(Math.round(s('weight')))} kg`) + tile('Total', 'Rs ' + compact(s('total')))
+      + tile('Commission', 'Rs ' + compact(s('commission'))) + tile('Kharcha', 'Rs ' + compact(s('kharcha')))
+      + tile('Suppliers owe', rs(-all.filter((b) => b.final < 0).reduce((x, b) => x + b.final, 0)))
+      + tile('Shop owes', rs(all.filter((b) => b.final > 0).reduce((x, b) => x + b.final, 0)));
+  }
+
+  async function load() {
+    setQuery({ month });
+    $<HTMLInputElement>('month').value = month;
+    $('title').textContent = monthName(month);
+    $<HTMLAnchorElement>('print-all').href = `/print?month=${month}`;
+    bills = await api('/bills', { params: { month } });
+    const fl = [...new Set(bills.map((b) => b.flower_name).filter(Boolean))];
+    const fsel = $<HTMLSelectElement>('flower'), keep = fsel.value;
+    fsel.innerHTML = '<option value="">All</option>' + fl.map((f) => `<option>${esc(f)}</option>`).join('');
+    fsel.value = fl.includes(keep) ? keep : '';
+    render();
+  }
+
+  document.addEventListener('click', (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-sort]');
+    if (!b) return;
+    if (sortKey === b.dataset.sort) sortDir = -sortDir;
+    else { sortKey = b.dataset.sort!; sortDir = ['supplier_name', 'flower_name', 'status'].includes(sortKey) ? 1 : -1; }
+    render();
+  });
+  ['q', 'status', 'flower', 'bal'].forEach((id) => $(id).addEventListener('input', render));
+  $<HTMLInputElement>('month').addEventListener('change', (e) => { const v = (e.target as HTMLInputElement).value; if (v) { month = v; load(); } });
+  $('prev').addEventListener('click', () => { month = shiftMonth(month, -1); load(); });
+  $('next').addEventListener('click', () => { month = shiftMonth(month, 1); load(); });
+
+  $('csv').addEventListener('click', () => {
+    const head = ['Supplier', 'Flower', 'Days', 'kg', 'Total', 'Commission', 'Net', 'Kharcha', 'Brought forward', 'Final', 'Status'];
+    const lines = filtered().map((b) => [b.supplier_name, b.flower_name || '', b.days_supplied, b.weight, b.total, b.commission, b.net, b.kharcha, b.opening_due, b.final, b.status]);
+    const csv = [head, ...lines].map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' }));
+    a.download = `bills-${month}.csv`;
+    a.click();
+  });
+
+  if (can('manager')) {
+    $('start').classList.remove('hidden');
+    $('start').addEventListener('click', async (e) => {
+      const ok = await dialog(`Start ${monthName(month)}`, `<p class="text-sm text-muted">Creates an empty bill for every active supplier who does not have one this month. Last month's closed balances are carried in.</p>`, 'Create bills');
+      if (ok) await busy(e.currentTarget as HTMLButtonElement, async () => {
+        const r = await api('/bills/start-month', { method: 'POST', body: { month } });
+        toast(`${r.created} bill(s) created`); load();
+      });
+    });
+  }
+  if (can('clerk')) {
+    $('new-bill').classList.remove('hidden');
+    $('new-bill').addEventListener('click', async () => {
+      const sups = await api('/suppliers');
+      const have = new Set(bills.map((b) => b.supplier_id));
+      const options = sups.filter((s: any) => !have.has(s.id)).map((s: any) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+      if (!options) return toast('Every supplier already has a bill this month');
+      const v = await dialog(`New bill for ${monthName(month)}`, `<div><label class="label">Supplier</label><select name="supplier_id" class="input">${options}</select></div>`, 'Create');
+      if (!v) return;
+      try {
+        const b = await api('/bills', { method: 'POST', body: { supplier_id: Number(v.supplier_id), month } });
+        location.href = `/bill?id=${b.id}&tab=edit`;
+      } catch (ex: any) { toast(ex.message, 'error'); }
+    });
+  }
+
+  (async () => {
+    if (!month) month = (await api('/bills/months'))[0] || thisMonth();
+    load();
+  })();
+</script>

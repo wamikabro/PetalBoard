@@ -1,0 +1,42 @@
+# Dependencies and build output
+node_modules/
+dist/
+.astro/
+.wrangler/
+__pycache__/
+.pytest_cache/
+*.pyc
+.venv/
+venv/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+.dev.vars
+
+# Shop data: scanned bills, workbooks, transcriptions, page images, backups.
+# Never commit these.
+*.pdf
+*.xlsx
+*.xls
+*.csv
+*.zip
+*.sql.gz
+*.dump
+*.backup
+pgdata/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# Files that hold real supplier/investor names or amounts (kept local only)
+CLAUDE.md
+data/
+api/import_bills.py
+api/tests/test_billing.py
+api/tests/test_import.py

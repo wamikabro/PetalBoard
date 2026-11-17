@@ -1,0 +1,212 @@
+---
+import App from '../layouts/App.astro';
+---
+<App title="Dashboard" active="dashboard" wide>
+  <div class="space-y-5">
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <p class="text-sm text-muted">Dashboard</p>
+        <h1 class="h-title" id="title">&nbsp;</h1>
+      </div>
+      <div class="flex items-center gap-2 no-print">
+        <button class="btn-ghost !px-2.5" id="prev" aria-label="Previous month">←</button>
+        <select id="month" class="input !w-44"></select>
+        <button class="btn-ghost !px-2.5" id="next" aria-label="Next month">→</button>
+        <a href="/daily" class="btn-primary">Enter today's flowers</a>
+      </div>
+    </div>
+
+    <div id="tiles" class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3"></div>
+
+    <div class="grid xl:grid-cols-2 gap-4">
+      <section class="card card-pad">
+        <div class="flex justify-between items-baseline gap-2">
+          <h2 class="font-semibold">Flowers bought each day</h2>
+          <button class="text-xs text-muted hover:text-ink no-print" data-table="daily">Show as table</button>
+        </div>
+        <p class="text-xs text-muted">kg, by flower</p>
+        <div class="h-64 mt-3"><canvas id="c-daily" aria-label="Kilograms bought each day"></canvas></div>
+        <div class="hidden mt-3 max-h-64 overflow-auto" data-table-for="daily"></div>
+      </section>
+      <section class="card card-pad">
+        <h2 class="font-semibold">Average rate each day</h2>
+        <p class="text-xs text-muted">Rs per kg, weighted by kg bought</p>
+        <div class="h-64 mt-3"><canvas id="c-rate" aria-label="Average rate each day"></canvas></div>
+      </section>
+    </div>
+
+    <div class="grid xl:grid-cols-[1.4fr_1fr] gap-4">
+      <section class="card overflow-hidden">
+        <div class="card-pad pb-2 flex justify-between items-baseline">
+          <h2 class="font-semibold">Suppliers this month</h2>
+          <a class="text-sm text-brand" id="all-bills" href="/bills">All bills →</a>
+        </div>
+        <div class="overflow-x-auto max-h-[460px]">
+          <table class="tbl"><thead class="sticky top-0 bg-panel"><tr><th>Supplier</th><th class="text-right">kg</th><th class="w-[30%]">Amount</th><th class="text-right">Final</th></tr></thead>
+          <tbody id="sup"></tbody></table>
+        </div>
+      </section>
+      <div class="space-y-4">
+        <section class="card card-pad">
+          <h2 class="font-semibold">Month by month</h2>
+          <p class="text-xs text-muted">Purchase amount</p>
+          <div class="h-48 mt-3"><canvas id="c-trend" aria-label="Purchase amount per month"></canvas></div>
+        </section>
+        <section class="card card-pad">
+          <h2 class="font-semibold">By flower</h2>
+          <div id="flowers" class="mt-2"></div>
+        </section>
+      </div>
+    </div>
+
+    <section class="card overflow-hidden">
+      <div class="card-pad pb-2 flex justify-between items-baseline">
+        <h2 class="font-semibold">Who owes whom right now</h2>
+        <p class="text-xs text-muted" id="bal-sum"></p>
+      </div>
+      <div class="grid md:grid-cols-2 gap-0 md:divide-x divide-line" id="balances"></div>
+    </section>
+  </div>
+</App>
+
+<script>
+  import { api } from '../lib/api';
+  import { makeChart, onTheme, series } from '../lib/charts';
+  import { compact, esc, kg, monthName, monthShort, num, rs, rsSigned, shiftMonth, thisMonth } from '../lib/format';
+  import { qp, setQuery } from '../lib/ui';
+
+  const $ = (id: string) => document.getElementById(id)!;
+  const sel = $('month') as HTMLSelectElement;
+  let month = qp('month') || '';
+  let months: string[] = [];
+  let rep: any, overview: any[], bal: any;
+  let themed = false;
+  const flowerSlot = (name: string, all: string[]) => all.indexOf(name) + 1;
+
+  function delta(cur: number, prev: number | undefined, upGood = true) {
+    if (prev === undefined || prev === null || !prev) return '';
+    const d = ((cur - prev) / Math.abs(prev)) * 100;
+    if (Math.abs(d) < 0.5) return '<span class="text-xs text-muted">same as last month</span>';
+    const good = d > 0 === upGood;
+    return `<span class="text-xs ${good ? 'text-good' : 'text-bad'}">${d > 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(0)}% vs last month</span>`;
+  }
+
+  function tiles() {
+    const k = rep.kpis, p = rep.previous || {};
+    const t = (label: string, value: string, d = '', sub = '') =>
+      `<div class="card card-pad"><p class="stat-label">${label}</p><p class="stat-value">${value}</p><div class="mt-0.5 min-h-4">${d || `<span class="text-xs text-muted">${sub}</span>`}</div></div>`;
+    $('tiles').innerHTML =
+      t('Flowers bought', `${compact(Math.round(k.weight))} kg`, delta(k.weight, p.weight), `${k.suppliers} suppliers`) +
+      t('Purchase amount', 'Rs ' + compact(k.total), delta(k.total, p.total)) +
+      t('Commission earned', 'Rs ' + compact(k.commission), delta(k.commission, p.commission)) +
+      t('Kharcha given', 'Rs ' + compact(k.kharcha), delta(k.kharcha, p.kharcha, false)) +
+      t('Shop owes suppliers', 'Rs ' + compact(k.payable), '', 'on this month\'s bills') +
+      t('Suppliers owe shop', 'Rs ' + compact(k.receivable), '', `${k.open_bills} bills still open`);
+  }
+
+  function charts() {
+    const flowers: string[] = rep.flowers;
+    const labels = rep.daily.map((d: any) => d.day);
+    makeChart($('c-daily') as HTMLCanvasElement, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: flowers.map((f) => ({
+          label: f, data: rep.daily.map((d: any) => d.by_flower[f]?.weight ?? 0),
+          backgroundColor: series(flowerSlot(f, flowers)), stack: 'kg', borderColor: 'transparent',
+        })),
+      },
+      options: { scales: { x: { stacked: true }, y: { stacked: true } } } as any,
+    }, { unit: 'kg', legend: flowers.length > 1 });
+
+    makeChart($('c-rate') as HTMLCanvasElement, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: flowers.map((f) => ({
+          label: f, data: rep.daily.map((d: any) => d.by_flower[f]?.avg_rate ?? null),
+          borderColor: series(flowerSlot(f, flowers)), backgroundColor: series(flowerSlot(f, flowers)), spanGaps: true,
+        })),
+      },
+      options: { scales: { y: { beginAtZero: false } } } as any,
+    }, { money: true, legend: flowers.length > 1 });
+
+    makeChart($('c-trend') as HTMLCanvasElement, {
+      type: 'bar',
+      data: {
+        labels: overview.map((m) => monthShort(m.month)),
+        datasets: [{ label: 'Purchase amount', data: overview.map((m) => m.total),
+          backgroundColor: overview.map((m) => (m.month === month ? series(1) : series(1) + '66')) }],
+      },
+    }, { money: true, legend: false });
+  }
+
+  function tables() {
+    const max = Math.max(1, ...rep.by_supplier.map((b: any) => b.total));
+    $('sup').innerHTML = rep.by_supplier.map((b: any) => `
+      <tr class="hover:bg-sunken/50 cursor-pointer" onclick="location.href='/bill?id=${b.id}'">
+        <td><a class="font-medium hover:text-brand" href="/bill?id=${b.id}">${esc(b.supplier_name)}</a>
+          ${b.flower_name && b.flower_name !== 'Gulab' ? `<span class="chip bg-sunken text-muted ml-1">${esc(b.flower_name)}</span>` : ''}</td>
+        <td class="num">${kg(Math.round(b.weight))}</td>
+        <td><div class="flex items-center gap-2"><div class="h-2 rounded-r bg-[var(--series-1)]" style="width:${(b.total / max) * 100}%"></div><span class="text-xs tabular-nums text-muted">${compact(b.total)}</span></div></td>
+        <td class="num ${b.final < 0 ? 'neg' : 'pos'}">${rsSigned(b.final)}</td>
+      </tr>`).join('') || '<tr><td colspan="4" class="text-center text-muted py-8">No bills this month yet.</td></tr>';
+
+    $('flowers').innerHTML = rep.by_flower.map((f: any) => `
+      <div class="flex items-center gap-3 py-2 border-b border-line last:border-0">
+        <span class="w-2.5 h-2.5 rounded-sm" style="background:${series(flowerSlot(f.flower, rep.flowers))}"></span>
+        <span class="font-medium flex-1">${esc(f.flower)}</span>
+        <span class="text-sm text-muted tabular-nums">${kg(Math.round(f.weight))} kg</span>
+        <span class="text-sm tabular-nums w-28 text-right">${rs(f.amount)}</span>
+        <span class="text-xs text-muted tabular-nums w-24 text-right">${f.min_rate}–${f.max_rate}/kg</span>
+      </div>`).join('') || '<p class="text-sm text-muted">Nothing yet.</p>';
+
+    document.querySelector('[data-table-for="daily"]')!.innerHTML = `<table class="tbl"><thead><tr><th>Day</th><th class="text-right">kg</th><th class="text-right">Amount</th><th class="text-right">Kharcha</th><th class="text-right">Suppliers</th></tr></thead><tbody>
+      ${rep.daily.map((d: any) => `<tr><td>${d.day}</td><td class="num">${kg(d.weight)}</td><td class="num">${num(d.amount)}</td><td class="num">${num(d.kharcha)}</td><td class="num">${d.suppliers}</td></tr>`).join('')}</tbody></table>`;
+
+    const owe = bal.rows.filter((r: any) => r.balance < 0).sort((a: any, b: any) => a.balance - b.balance);
+    const owed = bal.rows.filter((r: any) => r.balance > 0).sort((a: any, b: any) => b.balance - a.balance);
+    const list = (title: string, items: any[], cls: string) => `
+      <div class="p-4 sm:p-5 pt-2">
+        <p class="text-sm font-medium mb-2">${title}</p>
+        ${items.slice(0, 8).map((r) => `<a href="/supplier?id=${r.supplier_id}" class="flex justify-between py-1.5 text-sm border-b border-line/60 last:border-0 hover:text-brand">
+          <span>${esc(r.name)} <span class="text-xs text-muted">${r.last_status === 'open' ? '· open' : ''}</span></span><span class="tabular-nums ${cls}">${rs(Math.abs(r.balance))}</span></a>`).join('') || '<p class="text-sm text-muted">Nobody.</p>'}
+        ${items.length > 8 ? `<a href="/reports?view=balances" class="text-xs text-brand">and ${items.length - 8} more →</a>` : ''}
+      </div>`;
+    $('balances').innerHTML = list('Suppliers who owe the shop', owe, 'neg') + list('Shop owes these suppliers', owed, 'pos');
+    $('bal-sum').textContent = `Receivable ${rs(bal.receivable)} · Payable ${rs(bal.payable)} · Advances out ${rs(bal.advances)}`;
+  }
+
+  async function load() {
+    setQuery({ month });
+    $('title').textContent = monthName(month);
+    ($('all-bills') as HTMLAnchorElement).href = `/bills?month=${month}`;
+    [rep, overview, bal] = await Promise.all([api('/reports/month', { params: { month } }), api('/reports/overview'), api('/reports/balances')]);
+    tiles();
+    tables();
+    if (!themed) { themed = true; onTheme(() => rep && charts()); } else charts();
+  }
+
+  document.addEventListener('click', (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>('[data-table]');
+    if (!b) return;
+    const box = document.querySelector(`[data-table-for="${b.dataset.table}"]`)!;
+    box.classList.toggle('hidden');
+    b.textContent = box.classList.contains('hidden') ? 'Show as table' : 'Hide table';
+  });
+
+  (async () => {
+    months = await api('/bills/months');
+    const cur = thisMonth();
+    const hasCur = months.includes(cur);
+    if (!hasCur) months.unshift(cur);
+    // Default: the latest month that has bills.
+    if (!month) month = !hasCur && months.length > 1 ? months[1] : months[0];
+    sel.innerHTML = months.map((m) => `<option value="${m}">${monthName(m)}</option>`).join('');
+    sel.value = month;
+    sel.addEventListener('change', () => { month = sel.value; load(); });
+    $('prev').addEventListener('click', () => { month = shiftMonth(month, -1); if (!months.includes(month)) { months.push(month); sel.innerHTML += `<option value="${month}">${monthName(month)}</option>`; } sel.value = month; load(); });
+    $('next').addEventListener('click', () => { month = shiftMonth(month, 1); if (!months.includes(month)) { months.unshift(month); sel.insertAdjacentHTML('afterbegin', `<option value="${month}">${monthName(month)}</option>`); } sel.value = month; load(); });
+    load();
+  })();
+</script>

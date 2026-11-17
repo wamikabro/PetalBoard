@@ -1,0 +1,62 @@
+---
+import App from '../layouts/App.astro';
+---
+<App title="Print bills" active="bills">
+  <div class="no-print flex flex-wrap items-end justify-between gap-3 mb-5">
+    <div>
+      <a href="/bills" id="back" class="text-sm text-muted hover:text-ink">← Bills</a>
+      <h1 class="h-title" id="title">Print bills</h1>
+      <p class="text-sm text-muted" id="count"></p>
+    </div>
+    <div class="flex gap-2 items-end">
+      <div><label class="label" for="which">Which bills</label>
+        <select id="which" class="input"><option value="all">All</option><option value="supplied">With flowers this month</option><option value="neg">Supplier owes shop</option><option value="pos">Shop owes supplier</option></select></div>
+      <button class="btn-primary" id="print">Print / Save PDF</button>
+    </div>
+  </div>
+  <p class="no-print text-xs text-muted mb-4">In the print window choose “Save as PDF” to get one PDF with one bill per A4 page.</p>
+  <div id="sheets" class="space-y-8 print:space-y-0"><p class="text-muted text-sm">Loading…</p></div>
+</App>
+
+<script>
+  import { api } from '../lib/api';
+  import { billSheetHtml } from '../lib/billsheet';
+  import { esc, monthName } from '../lib/format';
+  import { qp } from '../lib/ui';
+
+  const month = qp('month');
+  const ids = (qp('ids') || '').split(',').filter(Boolean).map(Number);
+  const box = document.getElementById('sheets')!;
+  let full: any[] = [];
+  let settings: any;
+
+  function render() {
+    const which = (document.getElementById('which') as HTMLSelectElement).value;
+    const list = full.filter((b) => which === 'all' || (which === 'supplied' ? b.totals.total > 0 : which === 'neg' ? b.totals.final < 0 : b.totals.final > 0));
+    box.innerHTML = list.map((b) => `<div class="print-page">${billSheetHtml(b, settings)}</div>`).join('') || '<p class="text-muted">No bills.</p>';
+    document.getElementById('count')!.textContent = `${list.length} bill(s)`;
+  }
+
+  (async () => {
+    try {
+      settings = await api('/settings');
+      let list = ids;
+      if (month) {
+        document.getElementById('title')!.textContent = `Bills · ${monthName(month)}`;
+        (document.getElementById('back') as HTMLAnchorElement).href = `/bills?month=${month}`;
+        list = (await api('/bills', { params: { month } })).sort((a: any, b: any) => a.supplier_name.localeCompare(b.supplier_name)).map((b: any) => b.id);
+      }
+      // Load a few at a time so 40 bills don't hit the server all at once.
+      full = [];
+      for (let i = 0; i < list.length; i += 6) {
+        full.push(...(await Promise.all(list.slice(i, i + 6).map((id) => api(`/bills/${id}`)))));
+        box.innerHTML = `<p class="text-muted text-sm">Loading ${full.length} of ${list.length}…</p>`;
+      }
+      render();
+    } catch (e: any) {
+      box.innerHTML = `<p class="text-bad">${esc(e.message)}</p>`;
+    }
+  })();
+  document.getElementById('which')!.addEventListener('change', render);
+  document.getElementById('print')!.addEventListener('click', () => window.print());
+</script>

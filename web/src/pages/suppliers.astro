@@ -1,0 +1,94 @@
+---
+import App from '../layouts/App.astro';
+---
+<App title="Suppliers" active="suppliers" wide>
+  <div class="space-y-4">
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div><p class="text-sm text-muted">People who bring flowers</p><h1 class="h-title">Suppliers</h1></div>
+      <button class="btn-primary hidden" id="add">+ New supplier</button>
+    </div>
+    <div class="card card-pad flex flex-col md:flex-row gap-3 md:items-end">
+      <div class="flex-1"><label class="label" for="q">Search</label><input id="q" class="input" placeholder="Name or phone" /></div>
+      <div><label class="label" for="flower">Flower</label><select id="flower" class="input"><option value="">All</option></select></div>
+      <div><label class="label" for="sort">Sort by</label>
+        <select id="sort" class="input"><option value="name">Name</option><option value="owes">Owes the shop most</option><option value="owed">Shop owes most</option><option value="advance">Biggest advance</option><option value="last">Biggest last bill</option></select></div>
+      <label class="flex items-center gap-2 text-sm pb-2"><input type="checkbox" id="inactive" /> Show inactive</label>
+    </div>
+    <div id="list" class="grid sm:grid-cols-2 xl:grid-cols-3 gap-3"></div>
+  </div>
+</App>
+
+<script>
+  import { api, can } from '../lib/api';
+  import { balanceWords, esc, kg, monthShort, rs, rsSigned } from '../lib/format';
+  import { dialog, toast } from '../lib/ui';
+
+  const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+  let sups: any[] = [];
+  let flowers: any[] = [];
+
+  function render() {
+    const q = $<HTMLInputElement>('q').value.trim().toLowerCase();
+    const fl = $<HTMLSelectElement>('flower').value;
+    const sort = $<HTMLSelectElement>('sort').value;
+    const list = sups
+      .filter((s) => (!q || s.name.toLowerCase().includes(q) || (s.phone || '').includes(q)) && (!fl || String(s.flower_id) === fl))
+      .sort((a, b) => sort === 'owes' ? a.balance - b.balance : sort === 'owed' ? b.balance - a.balance
+        : sort === 'advance' ? b.advance - a.advance : sort === 'last' ? (b.last_bill?.total || 0) - (a.last_bill?.total || 0)
+        : a.name.localeCompare(b.name));
+    $('list').innerHTML = list.map((s) => `
+      <a href="/supplier?id=${s.id}" class="card card-pad block hover:border-brand/50 transition ${s.active ? '' : 'opacity-60'}">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <p class="font-semibold truncate">${esc(s.name)} ${s.active ? '' : '<span class="chip bg-sunken text-muted">Inactive</span>'}</p>
+            <p class="text-xs text-muted">${esc(s.flower_name || 'No flower set')} · ${s.commission_pct}% commission${s.phone ? ' · ' + esc(s.phone) : ''}</p>
+          </div>
+          <div class="text-right">
+            <p class="font-semibold tabular-nums ${s.balance < 0 ? 'neg' : s.balance > 0 ? 'pos' : 'text-muted'}">${rsSigned(s.balance)}</p>
+            <p class="text-[11px] text-muted">${balanceWords(s.balance)}</p>
+          </div>
+        </div>
+        <div class="mt-3 grid grid-cols-3 gap-2 text-xs">
+          <div><p class="text-muted">Advance</p><p class="font-medium tabular-nums">${rs(s.advance)}</p></div>
+          <div><p class="text-muted">Last bill</p><p class="font-medium tabular-nums">${s.last_bill ? rs(s.last_bill.total) : '—'}</p></div>
+          <div><p class="text-muted">${s.last_bill ? monthShort(s.last_bill.month) : 'Month'}</p><p class="font-medium tabular-nums">${s.last_bill ? kg(Math.round(s.last_bill.weight)) + ' kg' : '—'}</p></div>
+        </div>
+      </a>`).join('') || '<p class="text-muted text-sm col-span-full text-center py-10">No suppliers match.</p>';
+  }
+
+  async function load() {
+    [sups, flowers] = await Promise.all([api('/suppliers', { params: { include_inactive: $<HTMLInputElement>('inactive').checked } }), api('/flowers')]);
+    const fsel = $<HTMLSelectElement>('flower');
+    if (fsel.options.length === 1) fsel.innerHTML += flowers.map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
+    render();
+  }
+
+  ['q', 'flower', 'sort'].forEach((id) => $(id).addEventListener('input', render));
+  $('inactive').addEventListener('change', load);
+
+  if (can('clerk')) {
+    $('add').classList.remove('hidden');
+    $('add').addEventListener('click', async () => {
+      const v = await dialog('New supplier', `
+        <div><label class="label">Name (as written on the bill)</label><input name="name" class="input" required /></div>
+        <div><label class="label">Name in Urdu (optional)</label><input name="name_ur" class="input urdu" dir="rtl" /></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Flower</label><select name="flower_id" class="input">${flowers.map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('')}</select></div>
+          <div><label class="label">Commission %</label><input name="commission_pct" type="number" step="0.01" min="0" max="100" value="10" class="input" /></div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Phone</label><input name="phone" class="input" inputmode="tel" /></div>
+          <div><label class="label">Village / area</label><input name="place" class="input" /></div>
+        </div>`, 'Add supplier');
+      if (!v) return;
+      try {
+        const s = await api('/suppliers', { method: 'POST', body: {
+          name: v.name, name_ur: v.name_ur || null, flower_id: Number(v.flower_id) || null,
+          commission_pct: Number(v.commission_pct), phone: v.phone || null, place: v.place || null } });
+        toast(`${s.name} added`);
+        location.href = `/supplier?id=${s.id}`;
+      } catch (e: any) { toast(e.message, 'error'); }
+    });
+  }
+  load();
+</script>

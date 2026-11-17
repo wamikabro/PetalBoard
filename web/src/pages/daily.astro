@@ -1,0 +1,360 @@
+---
+import App from '../layouts/App.astro';
+---
+<App title="Daily entry" active="daily" wide>
+  <div class="flex flex-col gap-4">
+    <!-- Date bar -->
+    <div class="flex flex-wrap items-center gap-3 justify-between">
+      <div>
+        <p class="text-sm text-muted">Daily entry</p>
+        <h1 class="h-title" id="date-title">&nbsp;</h1>
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="btn-ghost !px-2.5" id="prev-day" aria-label="Previous day">
+          <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" /></svg>
+        </button>
+        <input type="date" id="date" class="input !w-auto" />
+        <button class="btn-ghost !px-2.5" id="next-day" aria-label="Next day">
+          <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z" /></svg>
+        </button>
+        <button class="btn-ghost" id="today">Today</button>
+      </div>
+    </div>
+
+    <!-- Day totals -->
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3" id="tiles"></div>
+
+    <!-- Tools -->
+    <div class="card card-pad flex flex-col lg:flex-row gap-3 lg:items-end">
+      <div class="flex-1 min-w-0">
+        <label class="label" for="search">Find supplier</label>
+        <input id="search" class="input" placeholder="Type a name…  (press / to jump here)" autocomplete="off" />
+      </div>
+      <div>
+        <label class="label">Show</label>
+        <div class="flex rounded-lg border border-line overflow-hidden text-sm" id="show">
+          <button data-show="all" class="px-3 py-2">All</button>
+          <button data-show="pending" class="px-3 py-2 border-l border-line">Not entered</button>
+          <button data-show="done" class="px-3 py-2 border-l border-line">Entered</button>
+        </div>
+      </div>
+      <div class="flex gap-2 items-end" id="rate-fill">
+        <div>
+          <label class="label" for="fill-flower">Today's rate for</label>
+          <select id="fill-flower" class="input !w-32"></select>
+        </div>
+        <div>
+          <label class="label" for="fill-rate">Rs / kg</label>
+          <input id="fill-rate" type="number" inputmode="decimal" min="0" class="input !w-24" />
+        </div>
+        <button class="btn-ghost" id="fill-apply" title="Put this rate on every row of that flower that has no rate yet">Fill empty rates</button>
+      </div>
+      <button class="btn-ghost" id="add-supplier">
+        <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z" /></svg>New supplier
+      </button>
+    </div>
+
+    <p id="closed-note" class="hidden text-sm rounded-lg bg-warn/10 text-warn px-3 py-2"></p>
+
+    <!-- The grid -->
+    <div class="card overflow-hidden">
+      <div class="hidden md:grid grid-cols-[minmax(150px,1.4fr)_110px_100px_120px_minmax(220px,2fr)_70px] gap-2 px-4 py-2 text-xs font-medium text-muted border-b border-line bg-sunken/60">
+        <span>Supplier</span><span class="text-right">Weight (kg)</span><span class="text-right">Rate</span><span class="text-right">Amount</span><span>Kharcha (money given today)</span><span class="text-right">Status</span>
+      </div>
+      <div id="rows" class="divide-y divide-line"></div>
+      <p id="empty" class="hidden p-8 text-center text-muted text-sm">No suppliers match.</p>
+    </div>
+    <p class="text-xs text-muted">
+      Saves on its own when you leave a row. <kbd class="px-1 rounded border border-line">Enter</kbd> goes to the next supplier,
+      <kbd class="px-1 rounded border border-line">↑</kbd> <kbd class="px-1 rounded border border-line">↓</kbd> move between rows.
+      An empty rate takes the supplier's last rate when you click into it.
+    </p>
+  </div>
+</App>
+
+<script>
+  import { api, can } from '../lib/api';
+  import { esc, kg, num, prettyDate, rs, shiftDay, today } from '../lib/format';
+  import { busy, dialog, qp, setQuery, toast } from '../lib/ui';
+
+  type K = { id: number; amount: number; tag: string | null; note: string | null };
+  type Row = {
+    supplier_id: number; supplier_name: string; flower_name: string | null; bill_id: number | null;
+    bill_status: string | null; weight: number | null; rate: number | null; amount: number | null;
+    note: string | null; kharcha: K[]; last_rate: number | null;
+    _state?: 'saved' | 'dirty' | 'saving' | 'error';
+    _orig?: number | null; // weight as last saved
+  };
+
+  const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+  const dateInput = $<HTMLInputElement>('date');
+  const rowsBox = $('rows');
+  const canEdit = can('clerk');
+  let current = qp('date') || today();
+  let rows: Row[] = [];
+  let show: 'all' | 'pending' | 'done' = 'all';
+
+  const amountOf = (w: number | null, r: number | null) => (w == null || r == null ? null : Math.floor(Math.round(w * 1000) * Math.round(r * 100) / 100000));
+  const parse = (v: string) => (v.trim() === '' ? null : Number(v));
+
+  function tiles() {
+    const entered = rows.filter((r) => r.weight);
+    const w = entered.reduce((s, r) => s + (r.weight || 0), 0);
+    const a = entered.reduce((s, r) => s + (r.amount || 0), 0);
+    const k = rows.reduce((s, r) => s + r.kharcha.reduce((x, y) => x + y.amount, 0), 0);
+    const active = rows.filter((r) => r.bill_status !== 'closed').length;
+    const t = (label: string, value: string, sub = '') =>
+      `<div class="card card-pad"><p class="stat-label">${label}</p><p class="stat-value">${value}</p>${sub ? `<p class="text-xs text-muted mt-0.5">${sub}</p>` : ''}</div>`;
+    $('tiles').innerHTML =
+      t('Suppliers entered', `${entered.length}<span class="text-base text-muted font-normal"> / ${active}</span>`) +
+      t('Flowers bought', `${kg(Math.round(w * 100) / 100)} kg`) +
+      t('Amount', rs(a)) +
+      t('Average rate', w ? `Rs ${(a / w).toFixed(0)}` : '—', 'per kg') +
+      t('Kharcha given', rs(k));
+  }
+
+  function stateDot(r: Row) {
+    if (r.bill_status === 'closed') return '<span class="chip bg-sunken text-muted" title="This month is closed">Locked</span>';
+    switch (r._state) {
+      case 'saving': return '<span class="text-xs text-muted">Saving…</span>';
+      case 'dirty': return '<span class="text-xs text-warn">Not saved</span>';
+      case 'error': return '<span class="text-xs text-bad">Error</span>';
+      default: return r.weight || r.kharcha.length ? '<span class="text-xs text-good">✓ Saved</span>' : '';
+    }
+  }
+
+  function rowHtml(r: Row, i: number) {
+    const locked = !canEdit || r.bill_status === 'closed';
+    const dis = locked ? 'disabled' : '';
+    const kh = r.kharcha.map((k) => `
+      <span class="chip bg-brand-soft text-brand">${num(k.amount)}${k.tag ? `<sup>${esc(k.tag)}</sup>` : ''}${k.note ? ` · ${esc(k.note)}` : ''}
+        ${locked ? '' : `<button data-del-k="${k.id}" class="ml-0.5 -mr-1 px-1 rounded hover:bg-brand/20" aria-label="Remove ${num(k.amount)}">×</button>`}
+      </span>`).join('');
+    return `
+    <div class="row grid grid-cols-2 md:grid-cols-[minmax(150px,1.4fr)_110px_100px_120px_minmax(220px,2fr)_70px] gap-x-2 gap-y-2 px-4 py-2.5 items-center hover:bg-sunken/40 ${locked ? 'opacity-70' : ''}" data-i="${i}">
+      <div class="col-span-2 md:col-span-1 min-w-0 flex items-center gap-2">
+        <a href="/supplier?id=${r.supplier_id}" class="font-medium truncate hover:text-brand">${esc(r.supplier_name)}</a>
+        ${r.flower_name && r.flower_name !== 'Gulab' ? `<span class="chip bg-sunken text-muted">${esc(r.flower_name)}</span>` : ''}
+        <span class="md:hidden ml-auto">${stateDot(r)}</span>
+      </div>
+      <label class="md:contents"><span class="md:hidden label">Weight (kg)</span>
+        <input class="cell input md:!border-transparent" data-f="weight" type="number" inputmode="decimal" step="0.001" min="0" value="${r.weight ?? ''}" ${dis} aria-label="Weight for ${esc(r.supplier_name)}" /></label>
+      <label class="md:contents"><span class="md:hidden label">Rate (Rs/kg)</span>
+        <input class="cell input md:!border-transparent" data-f="rate" type="number" inputmode="decimal" step="0.01" min="0" value="${r.rate ?? ''}" placeholder="${r.last_rate ?? ''}" ${dis} aria-label="Rate for ${esc(r.supplier_name)}" /></label>
+      <div class="text-right tabular-nums font-medium" data-amount>${r.amount != null ? num(r.amount) : '<span class="text-faint">—</span>'}</div>
+      <div class="col-span-2 md:col-span-1 flex flex-wrap items-center gap-1.5">
+        ${kh}
+        ${locked ? '' : `<input class="cell input md:!border-transparent !w-28 !text-left" data-f="kharcha" type="number" inputmode="numeric" placeholder="+ kharcha" aria-label="Add kharcha for ${esc(r.supplier_name)}" />
+        <input class="cell input md:!border-transparent !w-12 !text-left" data-f="tag" maxlength="4" placeholder="tag" title="Letter written beside it on paper, e.g. B" aria-label="Tag" />`}
+      </div>
+      <div class="hidden md:block text-right" data-state>${stateDot(r)}</div>
+    </div>`;
+  }
+
+  function visible(r: Row) {
+    const q = ($<HTMLInputElement>('search').value || '').trim().toLowerCase();
+    if (q && !r.supplier_name.toLowerCase().includes(q)) return false;
+    if (show === 'pending') return !r.weight && r.bill_status !== 'closed';
+    if (show === 'done') return !!r.weight;
+    return true;
+  }
+
+  function render() {
+    const html = rows.map((r, i) => (visible(r) ? rowHtml(r, i) : '')).join('');
+    rowsBox.innerHTML = html;
+    $('empty').classList.toggle('hidden', !!html);
+    document.querySelectorAll<HTMLButtonElement>('#show button').forEach((b) =>
+      b.classList.toggle('bg-brand-soft', b.dataset.show === show));
+    tiles();
+  }
+
+  function refreshRow(i: number) {
+    const el = rowsBox.querySelector<HTMLElement>(`.row[data-i="${i}"]`);
+    if (!el) return;
+    const r = rows[i];
+    el.querySelector('[data-amount]')!.innerHTML = r.amount != null ? num(r.amount) : '<span class="text-faint">—</span>';
+    el.querySelectorAll('[data-state], .md\\:hidden.ml-auto').forEach((s) => (s.innerHTML = stateDot(r)));
+    tiles();
+  }
+
+  async function load() {
+    dateInput.value = current;
+    $('date-title').textContent = prettyDate(current);
+    setQuery({ date: current });
+    rowsBox.innerHTML = '<p class="p-8 text-center text-muted text-sm">Loading…</p>';
+    try {
+      const d = await api(`/daily/${current}`);
+      rows = d.rows.map((r: Row) => ({ ...r, _orig: r.weight }));
+      const closed = rows.filter((r) => r.bill_status === 'closed').length;
+      $('closed-note').classList.toggle('hidden', !closed);
+      $('closed-note').textContent = closed ? `${closed} supplier bill(s) for this month are closed and locked. Reopen them from the Bills page to change them.` : '';
+      const flowers = [...new Set(rows.map((r) => r.flower_name || 'Other'))];
+      $<HTMLSelectElement>('fill-flower').innerHTML = flowers.map((f) => `<option>${esc(f)}</option>`).join('');
+      render();
+    } catch (e: any) {
+      rowsBox.innerHTML = `<p class="p-8 text-center text-bad text-sm">${esc(e.message)}</p>`;
+    }
+  }
+
+  async function save(i: number, kharcha?: { amount: number; tag: string | null }) {
+    const r = rows[i];
+    r._state = 'saving';
+    refreshRow(i);
+    try {
+      await api(`/daily/${current}`, { method: 'PUT', body: { rows: [{
+        supplier_id: r.supplier_id, weight: r.weight, rate: r.weight == null ? null : r.rate, note: r.note,
+        add_kharcha: kharcha?.amount ?? null, kharcha_tag: kharcha?.tag ?? null,
+      }] } });
+      if (kharcha) {
+        // Reload this row so the new kharcha chip has its id.
+        const d = await api(`/daily/${current}`);
+        const fresh = d.rows.find((x: Row) => x.supplier_id === r.supplier_id);
+        if (fresh) rows[i] = { ...fresh, _state: 'saved', _orig: fresh.weight };
+        render();
+      } else {
+        r._state = 'saved';
+        r._orig = r.weight;
+        if (r.weight == null) r.amount = null;
+        refreshRow(i);
+      }
+    } catch (e: any) {
+      r._state = 'error';
+      refreshRow(i);
+      toast(`${r.supplier_name}: ${e.message}`, 'error');
+    }
+  }
+
+  // Typing updates the amount live; leaving the row saves it.
+  rowsBox.addEventListener('input', (e) => {
+    const inp = e.target as HTMLInputElement;
+    const el = inp.closest<HTMLElement>('.row');
+    if (!el || !inp.dataset.f || !['weight', 'rate'].includes(inp.dataset.f)) return;
+    const i = Number(el.dataset.i);
+    const r = rows[i];
+    (r as any)[inp.dataset.f] = parse(inp.value);
+    r.amount = amountOf(r.weight, r.rate);
+    r._state = 'dirty';
+    refreshRow(i);
+  });
+
+  rowsBox.addEventListener('focusin', (e) => {
+    const inp = e.target as HTMLInputElement;
+    if (inp.dataset.f === 'rate' && !inp.value && inp.placeholder) {
+      inp.value = inp.placeholder;
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.select();
+    }
+  });
+
+  rowsBox.addEventListener('focusout', (e) => {
+    const inp = e.target as HTMLInputElement;
+    const el = inp.closest<HTMLElement>('.row');
+    if (!el) return;
+    const next = (e as FocusEvent).relatedTarget as HTMLElement | null;
+    if (next && el.contains(next)) return; // still in the same row
+    const i = Number(el.dataset.i);
+    const r = rows[i];
+    if (r._state !== 'dirty') return;
+    if (r.weight == null && r.rate != null) {
+      // Only a rate, no weight: nothing was bought. Keep the rate on screen, nothing to save
+      // unless this day had a saved weight before (then save the clearing).
+      if (r._orig == null) { r._state = undefined; refreshRow(i); return; }
+      save(i); // the saved weight was cleared: remove the day
+      return;
+    }
+    if (r.weight != null && r.rate == null) return; // waiting for the rate
+    save(i);
+  });
+
+  rowsBox.addEventListener('keydown', (e) => {
+    const inp = e.target as HTMLInputElement;
+    const el = inp.closest<HTMLElement>('.row');
+    if (!el || !inp.dataset.f) return;
+    if (inp.dataset.f === 'kharcha' || inp.dataset.f === 'tag') {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const amtInput = el.querySelector<HTMLInputElement>('[data-f="kharcha"]')!;
+        const tagInput = el.querySelector<HTMLInputElement>('[data-f="tag"]')!;
+        const amount = Number(amtInput.value);
+        if (!amount) return;
+        const i = Number(el.dataset.i);
+        save(i, { amount, tag: tagInput.value.trim() || null });
+      }
+      return;
+    }
+    const move = e.key === 'Enter' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+    if (!move) return;
+    e.preventDefault();
+    const all = [...rowsBox.querySelectorAll<HTMLInputElement>(`[data-f="${inp.dataset.f}"]:not([disabled])`)];
+    const at = all.indexOf(inp);
+    all[at + move]?.focus();
+  });
+
+  rowsBox.addEventListener('click', async (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-del-k]');
+    if (!b) return;
+    const el = b.closest<HTMLElement>('.row')!;
+    const i = Number(el.dataset.i);
+    await busy(b, async () => {
+      await api(`/kharcha/${b.dataset.delK}`, { method: 'DELETE' });
+      rows[i].kharcha = rows[i].kharcha.filter((k) => String(k.id) !== b.dataset.delK);
+      render();
+      toast('Kharcha removed');
+    });
+  });
+
+  $('search').addEventListener('input', render);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && !(e.target instanceof HTMLInputElement)) { e.preventDefault(); $('search').focus(); }
+  });
+  document.querySelectorAll<HTMLButtonElement>('#show button').forEach((b) =>
+    b.addEventListener('click', () => { show = b.dataset.show as any; render(); }));
+
+  const go = (d: string) => {
+    if (rows.some((r) => r._state === 'dirty') && !confirm('Some rows are not saved (weight without rate?). Leave anyway?')) return;
+    current = d; load();
+  };
+  dateInput.addEventListener('change', () => dateInput.value && go(dateInput.value));
+  $('prev-day').addEventListener('click', () => go(shiftDay(current, -1)));
+  $('next-day').addEventListener('click', () => go(shiftDay(current, 1)));
+  $('today').addEventListener('click', () => go(today()));
+
+  $('fill-apply').addEventListener('click', async () => {
+    const flower = $<HTMLSelectElement>('fill-flower').value;
+    const rate = parse($<HTMLInputElement>('fill-rate').value);
+    if (rate == null) return toast('Type the rate first', 'error');
+    let n = 0;
+    rows.forEach((r, i) => {
+      if ((r.flower_name || 'Other') === flower && r.rate == null && r.bill_status !== 'closed') {
+        r.rate = rate;
+        r.amount = amountOf(r.weight, r.rate);
+        r._state = r.weight != null ? 'dirty' : r._state;
+        n++;
+        if (r.weight != null) save(i);
+      }
+    });
+    render();
+    toast(n ? `Rate ${rate} put on ${n} row(s)` : 'No empty rates for that flower');
+  });
+
+  $('add-supplier').addEventListener('click', async () => {
+    const flowers = await api('/flowers');
+    const v = await dialog('New supplier', `
+      <div><label class="label">Name</label><input name="name" class="input" required /></div>
+      <div><label class="label">Flower</label><select name="flower_id" class="input">${flowers.map((f: any) => `<option value="${f.id}">${esc(f.name)}</option>`).join('')}</select></div>
+      <div><label class="label">Phone (optional)</label><input name="phone" class="input" inputmode="tel" /></div>`, 'Add supplier');
+    if (!v) return;
+    try {
+      await api('/suppliers', { method: 'POST', body: { name: v.name, flower_id: Number(v.flower_id), phone: v.phone || null } });
+      toast(`${v.name} added`);
+      load();
+    } catch (e: any) { toast(e.message, 'error'); }
+  });
+
+  window.addEventListener('beforeunload', (e) => {
+    if (rows.some((r) => r._state === 'dirty' || r._state === 'saving')) e.preventDefault();
+  });
+
+  if (!canEdit) $('rate-fill').classList.add('hidden');
+  load();
+</script>

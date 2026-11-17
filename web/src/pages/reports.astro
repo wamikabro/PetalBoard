@@ -1,0 +1,198 @@
+---
+import App from '../layouts/App.astro';
+---
+<App title="Reports" active="reports" wide>
+  <div class="space-y-4">
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div><p class="text-sm text-muted">Look at the data any way you like</p><h1 class="h-title" id="title">Reports</h1></div>
+      <div class="flex rounded-lg border border-line overflow-hidden text-sm no-print" id="views">
+        <button data-view="entries" class="px-3 py-2">Purchases</button>
+        <button data-view="balances" class="px-3 py-2 border-l border-line">Who owes whom</button>
+      </div>
+    </div>
+
+    <div class="card card-pad no-print" id="filters">
+      <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 items-end">
+        <div><label class="label" for="from">From</label><input type="date" id="from" class="input" /></div>
+        <div><label class="label" for="to">To</label><input type="date" id="to" class="input" /></div>
+        <div><label class="label" for="sup">Supplier</label><select id="sup" class="input"><option value="">All</option></select></div>
+        <div><label class="label" for="flower">Flower</label><select id="flower" class="input"><option value="">All</option></select></div>
+        <div><label class="label" for="group">Show</label>
+          <select id="group" class="input"><option value="day">Total per day</option><option value="supplier">Total per supplier</option><option value="month">Total per month</option><option value="flower">Total per flower</option><option value="none">Every entry</option></select></div>
+        <div class="flex gap-2"><button class="btn-ghost flex-1" id="csv">CSV</button><button class="btn-primary flex-1" id="print">Print / PDF</button></div>
+      </div>
+      <div class="mt-3 flex flex-wrap gap-2 text-xs" id="quick">
+        <span class="text-muted self-center">Quick:</span>
+        <button class="chip bg-sunken hover:bg-brand-soft" data-q="this">This month</button>
+        <button class="chip bg-sunken hover:bg-brand-soft" data-q="last">Last month</button>
+        <button class="chip bg-sunken hover:bg-brand-soft" data-q="3m">Last 3 months</button>
+        <button class="chip bg-sunken hover:bg-brand-soft" data-q="year">This year</button>
+        <button class="chip bg-sunken hover:bg-brand-soft" data-q="all">Everything</button>
+      </div>
+    </div>
+
+    <div id="out" class="space-y-4"></div>
+  </div>
+</App>
+
+<script>
+  import { api } from '../lib/api';
+  import { makeChart, onTheme, series } from '../lib/charts';
+  import { compact, esc, kg, monthName, monthShort, num, prettyDate, rs, rsSigned, shiftMonth, thisMonth, today } from '../lib/format';
+  import { qp, setQuery, toast } from '../lib/ui';
+
+  const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+  const out = $('out');
+  let view = qp('view') || 'entries';
+  let data: any = null;
+  let rows: any[] = [];
+  let header: string[] = [];
+  let themed = false;
+  let sortKey = 0, sortDir = 1;
+
+  const lastDay = (m: string) => { const [y, mo] = m.split('-').map(Number); return `${m}-${String(new Date(y, mo, 0).getDate()).padStart(2, '0')}`; };
+
+  function quick(q: string) {
+    const m = thisMonth();
+    const range: Record<string, [string, string]> = {
+      this: [`${m}-01`, today()], last: [`${shiftMonth(m, -1)}-01`, lastDay(shiftMonth(m, -1))],
+      '3m': [`${shiftMonth(m, -2)}-01`, today()], year: [`${m.slice(0, 4)}-01-01`, today()], all: ['2025-01-01', today()],
+    };
+    [$<HTMLInputElement>('from').value, $<HTMLInputElement>('to').value] = range[q];
+    load();
+  }
+
+  function group(): { head: string[]; body: any[][]; num: boolean[] } {
+    const g = $<HTMLSelectElement>('group').value;
+    const R = data.rows;
+    if (g === 'none') return {
+      head: ['Date', 'Supplier', 'Flower', 'kg', 'Rate', 'Amount', 'Kharcha'], num: [false, false, false, true, true, true, true],
+      body: R.map((r: any) => [r.date, r.supplier, r.flower, r.weight, r.rate, r.amount, r.kharcha]),
+    };
+    const key = (r: any) => g === 'day' ? r.date : g === 'month' ? r.date.slice(0, 7) : g === 'flower' ? (r.flower || 'Other') : r.supplier;
+    const m = new Map<string, any>();
+    for (const r of R) {
+      const k = key(r);
+      const x = m.get(k) || { k, w: 0, a: 0, kh: 0, n: new Set(), d: new Set() };
+      x.w += r.weight || 0; x.a += r.amount; x.kh += r.kharcha; x.n.add(r.supplier_id); if (r.weight) x.d.add(r.date);
+      m.set(k, x);
+    }
+    const label = { day: 'Date', month: 'Month', flower: 'Flower', supplier: 'Supplier' }[g]!;
+    const second = g === 'supplier' ? 'Days' : 'Suppliers';
+    return {
+      head: [label, second, 'kg', 'Amount', 'Avg rate', 'Commission (10%)', 'Kharcha'], num: [false, true, true, true, true, true, true],
+      body: [...m.values()].map((x) => [g === 'month' ? x.k : x.k, g === 'supplier' ? x.d.size : x.n.size, Math.round(x.w * 100) / 100,
+        x.a, x.w ? Math.round(x.a / x.w) : null, Math.floor(x.a / 10), x.kh]),
+    };
+  }
+
+  function renderEntries() {
+    const t = data.totals;
+    const g = group();
+    header = g.head;
+    rows = g.body.sort((a, b) => {
+      const x = a[sortKey], y = b[sortKey];
+      return (typeof x === 'string' ? String(x).localeCompare(String(y)) : (x ?? 0) - (y ?? 0)) * sortDir;
+    });
+    const from = $<HTMLInputElement>('from').value, to = $<HTMLInputElement>('to').value;
+    const sup = $<HTMLSelectElement>('sup'), fl = $<HTMLSelectElement>('flower');
+    const tile = (l: string, v: string) => `<div class="card card-pad"><p class="stat-label">${l}</p><p class="stat-value !text-xl">${v}</p></div>`;
+    const fmt = (v: any, i: number) => v === null || v === undefined ? '' : g.num[i] ? (header[i] === 'kg' ? kg(v) : num(v)) : header[i] === 'Date' ? v : header[i] === 'Month' ? monthName(v) : esc(v);
+    out.innerHTML = `
+      <div class="hidden print:block mb-2"><h2 class="text-lg font-semibold">Purchases ${prettyDate(from)} – ${prettyDate(to)}</h2>
+        <p class="text-sm">${sup.value ? 'Supplier: ' + esc(sup.selectedOptions[0].text) + ' · ' : ''}${fl.value ? 'Flower: ' + esc(fl.selectedOptions[0].text) : ''}</p></div>
+      <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        ${tile('Days with flowers', String(t.days))}${tile('Suppliers', String(t.suppliers))}${tile('Flowers', compact(Math.round(t.weight)) + ' kg')}
+        ${tile('Amount', 'Rs ' + compact(t.amount))}${tile('Average rate', t.avg_rate ? 'Rs ' + Math.round(t.avg_rate) + '/kg' : '—')}${tile('Kharcha', 'Rs ' + compact(t.kharcha))}
+      </div>
+      ${$<HTMLSelectElement>('group').value !== 'none' && rows.length > 1 ? `<section class="card card-pad no-print"><div class="h-56"><canvas id="c-rep"></canvas></div></section>` : ''}
+      <div class="card overflow-x-auto">
+        <table class="tbl">
+          <thead><tr>${header.map((h, i) => `<th class="${g.num[i] ? 'text-right' : ''}"><button data-sort="${i}" class="hover:text-ink">${h}${sortKey === i ? (sortDir > 0 ? ' ↑' : ' ↓') : ''}</button></th>`).join('')}</tr></thead>
+          <tbody>${rows.slice(0, 2000).map((r) => `<tr>${r.map((v, i) => `<td class="${g.num[i] ? 'num' : ''}">${fmt(v, i)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${header.length}" class="text-center text-muted py-10">Nothing in this range.</td></tr>`}</tbody>
+          ${rows.length ? `<tfoot><tr class="font-semibold bg-sunken/60">${header.map((h, i) => `<td class="px-3 py-2 ${g.num[i] ? 'num' : ''}">${i === 0 ? `${rows.length} rows` : ['kg', 'Amount', 'Kharcha', 'Commission (10%)'].includes(h) ? (h === 'kg' ? kg(Math.round(rows.reduce((s, r) => s + (r[i] || 0), 0))) : num(rows.reduce((s, r) => s + (r[i] || 0), 0))) : ''}</td>`).join('')}</tr></tfoot>` : ''}
+        </table>
+        ${rows.length > 2000 ? '<p class="p-3 text-xs text-muted">Showing the first 2,000 rows. CSV has them all.</p>' : ''}
+      </div>`;
+    if (!themed) { themed = true; onTheme(chart); } else chart();
+  }
+
+  function chart() {
+    const c = document.getElementById('c-rep') as HTMLCanvasElement | null;
+    if (!c || view !== 'entries') return;
+    const g = $<HTMLSelectElement>('group').value;
+    const ordered = g === 'day' || g === 'month' ? rows.slice().sort((a, b) => String(a[0]).localeCompare(String(b[0]))) : rows.slice().sort((a, b) => b[3] - a[3]).slice(0, 25);
+    makeChart(c, {
+      type: g === 'day' ? 'line' : 'bar',
+      data: { labels: ordered.map((r) => g === 'day' ? r[0].slice(5) : g === 'month' ? monthShort(r[0]) : r[0]),
+        datasets: [{ label: 'Amount', data: ordered.map((r) => r[3]), borderColor: series(1), backgroundColor: g === 'day' ? series(1) + '1a' : series(1), fill: g === 'day' }] },
+    }, { money: true, legend: false });
+  }
+
+  async function renderBalances() {
+    const b = await api('/reports/balances');
+    const list = b.rows.filter((r: any) => r.balance || r.advance).sort((x: any, y: any) => x.balance - y.balance);
+    header = ['Supplier', 'Balance', 'Who owes', 'Advance', 'Last bill', 'Status'];
+    rows = list.map((r: any) => [r.name, r.balance, r.balance > 0 ? 'Shop owes supplier' : r.balance < 0 ? 'Supplier owes shop' : '', r.advance, r.last_month, r.last_status]);
+    out.innerHTML = `
+      <div class="grid grid-cols-3 gap-3">
+        <div class="card card-pad"><p class="stat-label">Suppliers owe the shop</p><p class="stat-value neg">${rs(b.receivable)}</p></div>
+        <div class="card card-pad"><p class="stat-label">Shop owes suppliers</p><p class="stat-value pos">${rs(b.payable)}</p></div>
+        <div class="card card-pad"><p class="stat-label">Advances given out</p><p class="stat-value">${rs(b.advances)}</p></div>
+      </div>
+      <div class="card overflow-x-auto"><table class="tbl">
+        <thead><tr><th>Supplier</th><th class="text-right">Balance</th><th>Who owes</th><th class="text-right">Advance</th><th>Latest bill</th></tr></thead>
+        <tbody>${list.map((r: any) => `<tr><td><a class="font-medium hover:text-brand" href="/supplier?id=${r.supplier_id}">${esc(r.name)}</a></td>
+          <td class="num font-semibold ${r.balance < 0 ? 'neg' : 'pos'}">${rsSigned(r.balance)}</td><td class="text-muted">${r.balance > 0 ? 'Shop owes supplier' : r.balance < 0 ? 'Supplier owes shop' : ''}</td>
+          <td class="num">${num(r.advance)}</td><td>${r.last_month ? monthName(r.last_month) + (r.last_status === 'open' ? ' <span class="chip bg-good/10 text-good">open</span>' : '') : ''}</td></tr>`).join('')}</tbody>
+      </table></div>
+      <p class="text-xs text-muted">Balance is the latest bill's final total (or what was carried after closing it). Open bills still change as days are entered.</p>`;
+  }
+
+  async function load() {
+    document.querySelectorAll<HTMLButtonElement>('#views button').forEach((b) => b.classList.toggle('bg-brand-soft', b.dataset.view === view));
+    $('filters').classList.toggle('hidden', view !== 'entries');
+    $('title').textContent = view === 'entries' ? 'Purchases' : 'Who owes whom';
+    setQuery({ view, from: view === 'entries' ? $<HTMLInputElement>('from').value : null, to: view === 'entries' ? $<HTMLInputElement>('to').value : null });
+    out.innerHTML = '<p class="text-muted text-sm">Loading…</p>';
+    try {
+      if (view === 'balances') return renderBalances();
+      data = await api('/reports/entries', { params: { date_from: $<HTMLInputElement>('from').value, date_to: $<HTMLInputElement>('to').value,
+        supplier_id: $<HTMLSelectElement>('sup').value, flower_id: $<HTMLSelectElement>('flower').value } });
+      renderEntries();
+    } catch (e: any) { out.innerHTML = `<p class="text-bad text-sm">${esc(e.message)}</p>`; }
+  }
+
+  out.addEventListener('click', (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-sort]');
+    if (!b) return;
+    const k = Number(b.dataset.sort);
+    sortDir = sortKey === k ? -sortDir : (k === 0 ? 1 : -1);
+    sortKey = k;
+    renderEntries();
+  });
+  document.querySelectorAll<HTMLButtonElement>('#views button').forEach((b) => b.addEventListener('click', () => { view = b.dataset.view!; load(); }));
+  document.querySelectorAll<HTMLButtonElement>('#quick button').forEach((b) => b.addEventListener('click', () => quick(b.dataset.q!)));
+  ['from', 'to', 'sup', 'flower'].forEach((id) => $(id).addEventListener('change', load));
+  $('group').addEventListener('change', () => { sortKey = 0; sortDir = 1; data && renderEntries(); });
+  $('print').addEventListener('click', () => window.print());
+  $('csv').addEventListener('click', () => {
+    if (!rows.length) return toast('Nothing to export', 'error');
+    const csv = [header, ...rows].map((r) => r.map((v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' }));
+    a.download = view === 'entries' ? `purchases-${$<HTMLInputElement>('from').value}-to-${$<HTMLInputElement>('to').value}.csv` : `balances-${today()}.csv`;
+    a.click();
+  });
+
+  (async () => {
+    const [sups, flowers, months] = await Promise.all([api('/suppliers', { params: { include_inactive: true } }), api('/flowers'), api('/bills/months')]);
+    $('sup').innerHTML += sups.map((s: any) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    $('flower').innerHTML += flowers.map((f: any) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
+    const latest = months[0] || thisMonth();
+    $<HTMLInputElement>('from').value = qp('from') || `${latest}-01`;
+    $<HTMLInputElement>('to').value = qp('to') || lastDay(latest);
+    if (qp('supplier')) $<HTMLSelectElement>('sup').value = qp('supplier')!;
+    load();
+  })();
+</script>

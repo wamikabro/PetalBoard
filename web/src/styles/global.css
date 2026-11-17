@@ -1,0 +1,130 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Colour tokens as "r g b" so Tailwind can add opacity. Dark mode is its own set, not a flip. */
+:root {
+  color-scheme: light;
+  --surface: 246 244 248;
+  --panel: 255 255 255;
+  --sunken: 240 237 244;
+  --line: 226 221 232;
+  --ink: 28 22 38;
+  --muted: 98 90 110;
+  --faint: 150 143 160;
+  --brand: 157 38 104;        /* deep rose, from the bill header */
+  --brand-soft: 252 231 242;
+  --brand-ink: 255 255 255;
+  --good: 0 122 72;
+  --bad: 196 43 43;
+  --warn: 176 110 0;
+
+  /* chart series (dataviz reference palette, fixed order) */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --grid: #e7e3ec;
+  --axis: #8a8495;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface: 20 17 25;
+    --panel: 30 26 37;
+    --sunken: 24 21 30;
+    --line: 52 46 62;
+    --ink: 240 236 245;
+    --muted: 180 172 192;
+    --faint: 125 118 138;
+    --brand: 236 112 172;
+    --brand-soft: 64 30 50;
+    --brand-ink: 28 10 20;
+    --good: 76 200 140;
+    --bad: 240 110 110;
+    --warn: 232 176 64;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --grid: #2f2a38;
+    --axis: #8f889c;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: 20 17 25;
+  --panel: 30 26 37;
+  --sunken: 24 21 30;
+  --line: 52 46 62;
+  --ink: 240 236 245;
+  --muted: 180 172 192;
+  --faint: 125 118 138;
+  --brand: 236 112 172;
+  --brand-soft: 64 30 50;
+  --brand-ink: 28 10 20;
+  --good: 76 200 140;
+  --bad: 240 110 110;
+  --warn: 232 176 64;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --grid: #2f2a38;
+  --axis: #8f889c;
+}
+
+html { -webkit-text-size-adjust: 100%; }
+body {
+  @apply bg-surface text-ink font-sans antialiased;
+  font-feature-settings: "tnum" 1, "cv11" 1;
+}
+.urdu { font-family: "Noto Nastaliq Urdu", serif; direction: rtl; line-height: 2; }
+
+@layer components {
+  .card { @apply bg-panel border border-line rounded-xl; }
+  .card-pad { @apply p-4 sm:p-5; }
+  .h-title { @apply text-xl sm:text-2xl font-semibold tracking-tight; }
+  .label { @apply block text-xs font-medium text-muted mb-1; }
+  .input {
+    @apply w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm text-ink placeholder:text-faint
+           focus:outline-none focus:ring-2 focus:ring-brand/40 focus:border-brand transition;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition
+           disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap;
+  }
+  .btn-primary { @apply btn bg-brand text-brand-ink hover:opacity-90; }
+  .btn-ghost { @apply btn border border-line bg-panel text-ink hover:bg-sunken; }
+  .btn-danger { @apply btn border border-bad/40 text-bad hover:bg-bad/10; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium; }
+  .tbl { @apply w-full text-sm; }
+  .tbl th { @apply text-left text-xs font-medium text-muted px-3 py-2 border-b border-line whitespace-nowrap; }
+  .tbl td { @apply px-3 py-2 border-b border-line/70; }
+  .tbl tr:last-child td { @apply border-b-0; }
+  .num { @apply text-right tabular-nums; }
+  .pos { @apply text-good; }
+  .neg { @apply text-bad; }
+  .stat-label { @apply text-xs font-medium text-muted; }
+  .stat-value { @apply text-2xl font-semibold tracking-tight tabular-nums mt-1; }
+}
+
+/* Grid inputs: spreadsheet-like cells */
+.cell {
+  @apply w-full bg-transparent px-2 py-1.5 text-right tabular-nums rounded-md border border-transparent
+         focus:outline-none focus:border-brand focus:bg-brand-soft/50 hover:border-line;
+}
+input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number] { -moz-appearance: textfield; }
+
+/* Toasts */
+#toasts > div { animation: toast-in .18s ease-out; }
+@keyframes toast-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+@media print {
+  @page { size: A4; margin: 8mm; }
+  body { background: #fff !important; }
+  .no-print { display: none !important; }
+  .print-page { break-after: page; }
+  .print-page:last-child { break-after: auto; }
+}

@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+psycopg[binary]
+# exports (.xlsx)
+openpyxl
+# tests
+pytest
+httpx

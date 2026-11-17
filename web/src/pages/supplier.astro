@@ -1,0 +1,220 @@
+---
+import App from '../layouts/App.astro';
+---
+<App title="Supplier" active="suppliers" wide>
+  <div id="page" class="space-y-5"><p class="text-muted text-sm">Loading…</p></div>
+</App>
+
+<script>
+  import { api, can } from '../lib/api';
+  import { makeChart, onTheme, series } from '../lib/charts';
+  import { balanceWords, compact, esc, kg, monthName, monthShort, num, rs, rsSigned, today } from '../lib/format';
+  import { busy, dialog, download, qp, toast } from '../lib/ui';
+
+  const id = Number(qp('id'));
+  const page = document.getElementById('page')!;
+  let d: any;
+  let flowers: any[] = [];
+  let dayMonth = '';
+  let themed = false;
+
+  function header() {
+    const s = d.supplier, p = d.position;
+    const lifetime = d.bills.reduce((a: any, b: any) => ({ w: a.w + Number(b.weight || 0), t: a.t + b.total, c: a.c + b.commission }), { w: 0, t: 0, c: 0 });
+    const phone = s.phone ? s.phone.replace(/[^0-9]/g, '').replace(/^0/, '92') : '';
+    return `
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <a href="/suppliers" class="text-sm text-muted hover:text-ink">← Suppliers</a>
+        <h1 class="h-title flex items-center gap-2 flex-wrap">${esc(s.name)} ${s.name_ur ? `<span class="urdu text-lg text-muted">${esc(s.name_ur)}</span>` : ''}
+          ${s.active ? '' : '<span class="chip bg-sunken text-muted">Inactive</span>'}</h1>
+        <p class="text-sm text-muted">${esc(s.flower_name || 'No flower set')} · ${s.commission_pct}% commission${s.place ? ' · ' + esc(s.place) : ''}</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        ${s.phone ? `<a class="btn-ghost" href="tel:${esc(s.phone)}">Call</a><a class="btn-ghost" target="_blank" rel="noopener" href="https://wa.me/${phone}">WhatsApp</a>` : ''}
+        <button class="btn-ghost" id="dl">Download Excel</button>
+        ${can('clerk') ? '<button class="btn-ghost" id="edit">Edit details</button>' : ''}
+        ${d.position.last_bill ? `<a class="btn-primary" href="/bill?id=${d.position.last_bill.id}">Latest bill</a>` : ''}
+      </div>
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      <div class="card card-pad"><p class="stat-label">Balance now</p><p class="stat-value ${p.balance < 0 ? 'neg' : p.balance > 0 ? 'pos' : ''}">${rsSigned(p.balance)}</p><p class="text-xs text-muted">${balanceWords(p.balance)}</p></div>
+      <div class="card card-pad"><p class="stat-label">Advance outstanding</p><p class="stat-value">${rs(p.advance)}</p></div>
+      <div class="card card-pad"><p class="stat-label">Flowers, all time</p><p class="stat-value">${compact(Math.round(lifetime.w))} kg</p><p class="text-xs text-muted">${d.bills.length} month(s)</p></div>
+      <div class="card card-pad"><p class="stat-label">Bought, all time</p><p class="stat-value">Rs ${compact(lifetime.t)}</p></div>
+      <div class="card card-pad"><p class="stat-label">Commission earned</p><p class="stat-value">Rs ${compact(lifetime.c)}</p></div>
+    </div>`;
+  }
+
+  function body() {
+    const months = [...new Set(d.days.map((x: any) => x.date.slice(0, 7)))] as string[];
+    if (!dayMonth || !months.includes(dayMonth)) dayMonth = months[months.length - 1] || '';
+    return `
+    <div class="grid xl:grid-cols-2 gap-4">
+      <section class="card card-pad">
+        <div class="flex justify-between items-center gap-2">
+          <div><h2 class="font-semibold">Day by day</h2><p class="text-xs text-muted">kg brought each day</p></div>
+          <select id="day-month" class="input !w-40">${months.map((m) => `<option value="${m}" ${m === dayMonth ? 'selected' : ''}>${monthName(m)}</option>`).join('')}</select>
+        </div>
+        <div class="h-60 mt-3"><canvas id="c-days"></canvas></div>
+      </section>
+      <section class="card card-pad">
+        <h2 class="font-semibold">Rate compared with the market</h2>
+        <p class="text-xs text-muted">This supplier's rate and the average rate paid to everyone for the same flower, Rs/kg</p>
+        <div class="h-60 mt-3"><canvas id="c-rate"></canvas></div>
+      </section>
+    </div>
+    ${d.bills.length > 1 ? `<section class="card card-pad"><h2 class="font-semibold">Month by month</h2><p class="text-xs text-muted">Total amount of each bill</p><div class="h-52 mt-3"><canvas id="c-months"></canvas></div></section>` : ''}
+
+    <section class="card overflow-hidden">
+      <div class="card-pad pb-2"><h2 class="font-semibold">Bills</h2></div>
+      <div class="overflow-x-auto"><table class="tbl min-w-[760px]">
+        <thead><tr><th>Month</th><th class="text-right">Days</th><th class="text-right">kg</th><th class="text-right">Total</th><th class="text-right">Commission</th><th class="text-right">Kharcha</th><th class="text-right">B/F</th><th class="text-right">Final</th><th>Status</th><th></th></tr></thead>
+        <tbody>${d.bills.map((b: any) => `<tr class="hover:bg-sunken/50">
+          <td><a class="font-medium hover:text-brand" href="/bill?id=${b.id}">${monthName(b.month)}</a></td>
+          <td class="num">${b.days_supplied}</td><td class="num">${kg(b.weight)}</td><td class="num">${num(b.total)}</td>
+          <td class="num text-muted">${num(b.commission)}</td><td class="num">${num(b.kharcha)}</td><td class="num text-muted">${b.opening_due ? num(b.opening_due) : ''}</td>
+          <td class="num font-semibold ${b.final < 0 ? 'neg' : 'pos'}">${rsSigned(b.final)}</td>
+          <td><span class="chip ${b.status === 'closed' ? 'bg-sunken text-muted' : 'bg-good/10 text-good'}">${b.status}</span>${b.status === 'closed' && b.carried ? `<span class="text-xs text-muted ml-1">carried ${rsSigned(b.carried)}</span>` : ''}</td>
+          <td class="text-right"><a href="/bill?id=${b.id}" class="text-brand text-sm">Open</a></td></tr>`).join('') || '<tr><td colspan="10" class="text-center text-muted py-8">No bills yet.</td></tr>'}</tbody>
+      </table></div>
+    </section>
+
+    ${investorsSection()}
+
+    <div class="grid xl:grid-cols-2 gap-4">
+      <section class="card overflow-hidden">
+        <div class="card-pad pb-2 flex justify-between items-center">
+          <div><h2 class="font-semibold">Advance (ایڈوانس)</h2><p class="text-xs text-muted">Separate from the monthly bill</p></div>
+          ${can('manager') ? '<button class="btn-ghost" id="adv">Add / recover</button>' : ''}
+        </div>
+        <div class="overflow-x-auto max-h-80"><table class="tbl">
+          <thead><tr><th>Date</th><th>What</th><th class="text-right">Amount</th><th class="text-right">Balance</th><th></th></tr></thead>
+          <tbody>${d.advances.slice().reverse().map((a: any) => `<tr>
+            <td class="whitespace-nowrap">${a.on_date}</td>
+            <td>${({ given: 'Given', recovered: 'Recovered', bill_cut: 'Cut from bill', opening: 'Opening' } as any)[a.kind]}${a.note ? `<span class="block text-xs text-muted">${esc(a.note)}</span>` : ''}</td>
+            <td class="num ${a.amount < 0 ? 'neg' : ''}">${rsSigned(a.amount)}</td><td class="num font-medium">${rs(a.running)}</td>
+            <td class="text-right">${can('owner') && a.kind !== 'bill_cut' ? `<button class="text-xs text-muted hover:text-bad" data-del-adv="${a.id}">Delete</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-6">No advance.</td></tr>'}</tbody>
+        </table></div>
+      </section>
+      <section class="card overflow-hidden">
+        <div class="card-pad pb-2"><h2 class="font-semibold">Kharcha history</h2><p class="text-xs text-muted">Money given during the months, newest first</p></div>
+        <div class="overflow-x-auto max-h-80"><table class="tbl">
+          <thead><tr><th>Date</th><th class="text-right">Amount</th><th>Note</th></tr></thead>
+          <tbody>${d.kharcha.map((k: any) => `<tr><td class="whitespace-nowrap"><a class="hover:text-brand" href="/bill?id=${k.bill_id}&tab=edit">${k.date}</a></td>
+            <td class="num">${num(k.amount)}${k.tag ? `<sup>${esc(k.tag)}</sup>` : ''}</td><td class="text-muted">${esc(k.note || '')}</td></tr>`).join('') || '<tr><td colspan="3" class="text-center text-muted py-6">None.</td></tr>'}</tbody>
+        </table></div>
+      </section>
+    </div>`;
+  }
+
+  function investorsSection() {
+    if (!d.shares.length) return '';
+    return `
+    <section class="card overflow-hidden">
+      <div class="card-pad pb-2"><h2 class="font-semibold">Investors in this khaata</h2>
+        <p class="text-xs text-muted">Their share of the commission this khaata earns</p></div>
+      <div class="overflow-x-auto"><table class="tbl">
+        <thead><tr><th>Investor</th><th class="text-right">Share</th><th>From</th><th>To</th><th class="text-right">Earned from this khaata</th></tr></thead>
+        <tbody>${d.shares.map((x: any) => `<tr>
+          <td><a class="font-medium hover:text-brand" href="/investor?id=${x.investor_id}">${esc(x.investor_name)}</a></td>
+          <td class="num">${x.pct}%</td><td>${monthShort(x.from_month)}</td><td>${x.to_month ? monthShort(x.to_month) : 'running'}</td>
+          <td class="num">${rs(d.investor_earnings.filter((r: any) => r.investor_id === x.investor_id && r.month >= x.from_month && (!x.to_month || r.month <= x.to_month)).reduce((s: number, r: any) => s + r.earned, 0))}</td></tr>`).join('')}</tbody>
+      </table></div>
+    </section>`;
+  }
+
+  function charts() {
+    const days = d.days.filter((x: any) => x.date.startsWith(dayMonth));
+    makeChart(document.getElementById('c-days') as HTMLCanvasElement, {
+      type: 'bar',
+      data: { labels: days.map((x: any) => Number(x.date.slice(8))), datasets: [{ label: 'kg', data: days.map((x: any) => x.weight), backgroundColor: series(1) }] },
+    }, { unit: 'kg', legend: false });
+
+    const market = new Map(d.market.map((m: any) => [m.date, m.avg_rate]));
+    const all = d.days.slice(-62);
+    makeChart(document.getElementById('c-rate') as HTMLCanvasElement, {
+      type: 'line',
+      data: {
+        labels: all.map((x: any) => x.date.slice(5)),
+        datasets: [
+          { label: d.supplier.name, data: all.map((x: any) => x.rate), borderColor: series(1), backgroundColor: series(1) },
+          { label: 'Market average', data: all.map((x: any) => market.get(x.date) ?? null), borderColor: series(2), backgroundColor: series(2) },
+        ],
+      },
+      options: { scales: { y: { beginAtZero: false } } } as any,
+    }, { money: true });
+
+    const cm = document.getElementById('c-months') as HTMLCanvasElement | null;
+    if (cm) {
+      const bills = d.bills.slice().reverse();
+      makeChart(cm, { type: 'bar', data: { labels: bills.map((b: any) => monthShort(b.month)), datasets: [{ label: 'Total', data: bills.map((b: any) => b.total), backgroundColor: series(1) }] } }, { money: true, legend: false });
+    }
+  }
+
+  function render() {
+    page.innerHTML = header() + body();
+    if (!themed) { themed = true; onTheme(charts); } else charts();
+  }
+
+  async function load() {
+    [d, flowers] = await Promise.all([api(`/suppliers/${id}`), api('/flowers')]);
+    document.title = `${d.supplier.name} · PetalBoard`;
+    render();
+  }
+
+  page.addEventListener('change', (e) => {
+    const t = e.target as HTMLSelectElement;
+    if (t.id === 'day-month') { dayMonth = t.value; charts(); }
+  });
+
+  page.addEventListener('click', async (e) => {
+    const el = e.target as HTMLElement;
+    const btn = el.closest<HTMLButtonElement>('button');
+    if (!btn) return;
+    if (btn.id === 'dl') return download(`/export/supplier/${id}.xlsx`, btn);
+    if (btn.dataset.delAdv) {
+      if (!(await dialog('Delete this advance entry?', '<p class="text-sm text-muted">Only for mistakes. This cannot be undone.</p>', 'Delete', true))) return;
+      await busy(btn, async () => { await api(`/advances/${btn.dataset.delAdv}`, { method: 'DELETE' }); toast('Deleted'); load(); });
+    }
+    if (btn.id === 'adv') {
+      const v = await dialog('Advance', `
+        <div><label class="label">What happened</label><select name="kind" class="input"><option value="given">Gave advance to supplier</option><option value="recovered">Supplier paid advance back</option><option value="opening">Advance from before (opening)</option></select></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Amount (Rs)</label><input name="amount" type="number" min="1" class="input" required /></div>
+          <div><label class="label">Date</label><input name="on_date" type="date" class="input" value="${today()}" required /></div>
+        </div>
+        <div><label class="label">Note (optional)</label><input name="note" class="input" /></div>`);
+      if (v) await busy(btn, async () => {
+        await api(`/suppliers/${id}/advances`, { method: 'POST', body: { kind: v.kind, amount: Number(v.amount), on_date: v.on_date, note: v.note || null } });
+        toast('Saved'); load();
+      });
+    }
+    if (btn.id === 'edit') {
+      const s = d.supplier;
+      const v = await dialog('Edit supplier', `
+        <div><label class="label">Name</label><input name="name" class="input" value="${esc(s.name)}" required /></div>
+        <div><label class="label">Name in Urdu</label><input name="name_ur" class="input urdu" dir="rtl" value="${esc(s.name_ur || '')}" /></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Flower</label><select name="flower_id" class="input">${flowers.map((f) => `<option value="${f.id}" ${f.id === s.flower_id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></div>
+          <div><label class="label">Commission %</label><input name="commission_pct" type="number" step="0.01" min="0" max="100" class="input" value="${s.commission_pct}" /></div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Phone</label><input name="phone" class="input" value="${esc(s.phone || '')}" /></div>
+          <div><label class="label">Village / area</label><input name="place" class="input" value="${esc(s.place || '')}" /></div>
+        </div>
+        <div><label class="label">Notes</label><textarea name="notes" class="input" rows="2">${esc(s.notes || '')}</textarea></div>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="active" value="1" ${s.active ? 'checked' : ''} /> Active (shows on daily entry)</label>
+        <p class="text-xs text-muted">Commission and flower changes apply to new bills. Change an existing bill from its Bill settings.</p>`);
+      if (v) await busy(btn, async () => {
+        await api(`/suppliers/${id}`, { method: 'PATCH', body: {
+          name: v.name, name_ur: v.name_ur || null, flower_id: Number(v.flower_id), commission_pct: Number(v.commission_pct),
+          phone: v.phone || null, place: v.place || null, notes: v.notes || null, active: !!v.active } });
+        toast('Saved'); load();
+      });
+    }
+  });
+
+  if (!id) page.innerHTML = '<p class="text-bad">No supplier chosen.</p>';
+  else load().catch((e) => (page.innerHTML = `<p class="text-bad">${esc(e.message)}</p>`));
+</script>

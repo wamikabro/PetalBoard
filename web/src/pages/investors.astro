@@ -1,0 +1,93 @@
+---
+import App from '../layouts/App.astro';
+---
+<App title="Investors" active="investors" wide>
+  <div class="space-y-5">
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <p class="text-sm text-muted">People who put money into khaatas and share their commission</p>
+        <h1 class="h-title">Investors</h1>
+      </div>
+      <button class="btn-primary hidden" id="add">+ New investor</button>
+    </div>
+
+    <div id="tiles" class="grid grid-cols-2 lg:grid-cols-4 gap-3"></div>
+
+    <section class="card card-pad">
+      <h2 class="font-semibold">Commission share earned each month</h2>
+      <p class="text-xs text-muted">Rs, by investor</p>
+      <div class="h-64 mt-3"><canvas id="c-months" aria-label="Commission share earned each month by investor"></canvas></div>
+    </section>
+
+    <div id="list" class="grid md:grid-cols-2 xl:grid-cols-4 gap-3"></div>
+  </div>
+</App>
+
+<script>
+  import { api, can } from '../lib/api';
+  import { makeChart, onTheme, series } from '../lib/charts';
+  import { compact, esc, monthShort, rs } from '../lib/format';
+  import { dialog, toast } from '../lib/ui';
+
+  const $ = (id: string) => document.getElementById(id)!;
+  let invs: any[] = [];
+
+  function render() {
+    const sum = (k: string) => invs.reduce((s, i) => s + (i[k] || 0), 0);
+    const t = (l: string, v: string, sub = '') => `<div class="card card-pad"><p class="stat-label">${l}</p><p class="stat-value">${v}</p><p class="text-xs text-muted">${sub}</p></div>`;
+    $('tiles').innerHTML = t('Investors', String(invs.length), `${sum('khaatas')} khaatas`)
+      + t('Capital invested', 'Rs ' + compact(sum('capital')), 'invested − withdrawn')
+      + t('Commission share earned', 'Rs ' + compact(sum('earned')), 'all months')
+      + t('Still to pay investors', 'Rs ' + compact(sum('payable')), `paid so far Rs ${compact(sum('paid'))}`);
+
+    $('list').innerHTML = invs.map((i, n) => `
+      <a href="/investor?id=${i.id}" class="card card-pad block hover:border-brand/50 transition ${i.active ? '' : 'opacity-60'}">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-sm" style="background:${series(n + 1)}"></span>
+          <p class="font-semibold flex-1 truncate">${esc(i.name)}</p>
+          <span class="chip bg-sunken text-muted">${i.active_khaatas} khaata${i.active_khaatas === 1 ? '' : 's'}</span>
+        </div>
+        <dl class="mt-3 grid grid-cols-2 gap-2 text-xs">
+          <div><dt class="text-muted">Earned</dt><dd class="font-semibold tabular-nums text-sm">${rs(i.earned)}</dd></div>
+          <div><dt class="text-muted">Still to pay</dt><dd class="font-semibold tabular-nums text-sm">${rs(i.payable)}</dd></div>
+          <div><dt class="text-muted">Capital</dt><dd class="tabular-nums">${rs(i.capital)}</dd></div>
+          <div><dt class="text-muted">Last month</dt><dd class="tabular-nums">${i.by_month.length ? rs(i.by_month[i.by_month.length - 1].earned) + ' · ' + monthShort(i.by_month[i.by_month.length - 1].month) : '—'}</dd></div>
+        </dl>
+      </a>`).join('') || '<p class="text-muted text-sm col-span-full text-center py-10">No investors yet.</p>';
+  }
+
+  function chart() {
+    const months = [...new Set(invs.flatMap((i) => i.by_month.map((m: any) => m.month)))].sort();
+    makeChart($('c-months') as HTMLCanvasElement, {
+      type: 'bar',
+      data: {
+        labels: months.map(monthShort),
+        datasets: invs.slice(0, 4).map((i, n) => ({
+          label: i.name, stack: 'e', backgroundColor: series(n + 1), borderColor: 'transparent',
+          data: months.map((m) => i.by_month.find((x: any) => x.month === m)?.earned ?? 0),
+        })),
+      },
+      options: { scales: { x: { stacked: true }, y: { stacked: true } } } as any,
+    }, { money: true, legend: invs.length > 1 });
+  }
+
+  async function load() {
+    invs = await api('/investors');
+    render();
+  }
+
+  if (can('manager')) {
+    $('add').classList.remove('hidden');
+    $('add').addEventListener('click', async () => {
+      const v = await dialog('New investor', `
+        <div><label class="label">Name</label><input name="name" class="input" required /></div>
+        <div><label class="label">Phone (optional)</label><input name="phone" class="input" inputmode="tel" /></div>`, 'Add');
+      if (!v) return;
+      try {
+        const i = await api('/investors', { method: 'POST', body: { name: v.name, phone: v.phone || null } });
+        location.href = `/investor?id=${i.id}`;
+      } catch (e: any) { toast(e.message, 'error'); }
+    });
+  }
+  load().then(() => onTheme(chart)).catch((e) => toast(e.message, 'error'));
+</script>

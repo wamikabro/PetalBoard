@@ -1,0 +1,201 @@
+---
+import App from '../layouts/App.astro';
+---
+<App title="Investor" active="investors" wide>
+  <div id="page" class="space-y-5"><p class="text-muted text-sm">Loading…</p></div>
+</App>
+
+<script>
+  import { api, can } from '../lib/api';
+  import { makeChart, onTheme, series } from '../lib/charts';
+  import { compact, esc, monthName, monthShort, num, rs, thisMonth, today } from '../lib/format';
+  import { busy, dialog, download, qp, toast } from '../lib/ui';
+
+  const id = Number(qp('id'));
+  const page = document.getElementById('page')!;
+  let d: any;
+  let suppliers: any[] = [];
+  let themed = false;
+
+  const KIND: Record<string, string> = { invested: 'Invested', withdrawn: 'Withdrew', payout: 'Profit paid' };
+
+  function render() {
+    const i = d.investor;
+    const t = (l: string, v: string, sub = '') => `<div class="card card-pad"><p class="stat-label">${l}</p><p class="stat-value">${v}</p><p class="text-xs text-muted">${sub}</p></div>`;
+    const open = d.shares.filter((s: any) => !s.to_month);
+    page.innerHTML = `
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <a href="/investors" class="text-sm text-muted hover:text-ink">← Investors</a>
+        <h1 class="h-title">${esc(i.name)} ${i.active ? '' : '<span class="chip bg-sunken text-muted">Inactive</span>'}</h1>
+        <p class="text-sm text-muted">${open.map((s: any) => `${esc(s.supplier_name)} ${s.pct}%`).join(' · ') || 'No running khaata'}</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button class="btn-ghost" id="dl">Download Excel</button>
+        ${can('manager') ? '<button class="btn-ghost" id="edit">Edit</button><button class="btn-ghost" id="share">+ Khaata share</button><button class="btn-primary" id="money">+ Money in / out</button>' : ''}
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      ${t('Commission share earned', rs(i.earned), `${d.months.filter((m: any) => m.earned).length} months`)}
+      ${t('Paid out', rs(i.paid))}
+      ${t('Still to pay', rs(i.payable), 'earned − paid')}
+      ${t('Money invested', rs(i.invested), i.withdrawn ? `withdrawn ${rs(i.withdrawn)}` : '')}
+      ${t('Capital in the business', rs(i.capital))}
+    </div>
+
+    <section class="card card-pad">
+      <h2 class="font-semibold">Earned each month</h2>
+      <p class="text-xs text-muted">Share of each khaata's commission, Rs</p>
+      <div class="h-60 mt-3"><canvas id="c-months"></canvas></div>
+    </section>
+
+    <div class="grid xl:grid-cols-2 gap-4">
+      <section class="card overflow-hidden">
+        <div class="card-pad pb-2"><h2 class="font-semibold">Month by month</h2></div>
+        <div class="overflow-x-auto max-h-96"><table class="tbl">
+          <thead class="sticky top-0 bg-panel"><tr><th>Month</th><th class="text-right">Khaatas</th><th class="text-right">Their commission</th><th class="text-right">Earned</th><th class="text-right">Paid</th><th class="text-right">Still to pay</th></tr></thead>
+          <tbody>${d.months.slice().reverse().map((m: any) => `<tr>
+            <td>${monthName(m.month)}</td><td class="num">${m.khaatas}</td><td class="num text-muted">${num(m.commission)}</td>
+            <td class="num font-medium">${num(m.earned)}</td><td class="num">${m.paid ? num(m.paid) : ''}</td><td class="num">${num(m.payable_after)}</td></tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted py-6">Nothing yet.</td></tr>'}</tbody>
+        </table></div>
+      </section>
+      <section class="card overflow-hidden">
+        <div class="card-pad pb-2"><h2 class="font-semibold">By khaata</h2></div>
+        <div class="overflow-x-auto max-h-96"><table class="tbl">
+          <thead class="sticky top-0 bg-panel"><tr><th>Khaata</th><th class="text-right">Months</th><th class="text-right">Earned</th><th class="text-right">Invested</th><th class="text-right">Advance out</th></tr></thead>
+          <tbody>${d.khaatas.map((k: any) => `<tr>
+            <td><a class="font-medium hover:text-brand" href="/supplier?id=${k.supplier_id}">${esc(k.supplier_name)}</a></td>
+            <td class="num">${k.months}</td><td class="num font-medium">${num(k.earned)}</td><td class="num">${k.invested ? num(k.invested) : ''}</td><td class="num text-muted">${num(k.advance)}</td></tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-6">No khaatas.</td></tr>'}</tbody>
+        </table></div>
+      </section>
+    </div>
+
+    <div class="grid xl:grid-cols-2 gap-4">
+      <section class="card overflow-hidden">
+        <div class="card-pad pb-2"><h2 class="font-semibold">Khaata shares</h2><p class="text-xs text-muted">Which khaatas, what % of their commission, from when</p></div>
+        <div class="overflow-x-auto"><table class="tbl">
+          <thead><tr><th>Khaata</th><th class="text-right">Share</th><th>From</th><th>To</th><th></th></tr></thead>
+          <tbody>${d.shares.map((s: any) => `<tr>
+            <td><a class="hover:text-brand" href="/supplier?id=${s.supplier_id}">${esc(s.supplier_name)}</a>${s.note ? `<span class="block text-xs text-muted">${esc(s.note)}</span>` : ''}</td>
+            <td class="num font-medium">${s.pct}%</td><td>${monthShort(s.from_month)}</td><td>${s.to_month ? monthShort(s.to_month) : '<span class="chip bg-good/10 text-good">running</span>'}</td>
+            <td class="text-right whitespace-nowrap">${can('manager') ? `<button class="text-xs text-brand" data-edit-share="${s.id}">Edit</button>` : ''}${can('owner') ? ` · <button class="text-xs text-muted hover:text-bad" data-del-share="${s.id}">Delete</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-6">None.</td></tr>'}</tbody>
+        </table></div>
+      </section>
+      <section class="card overflow-hidden">
+        <div class="card-pad pb-2"><h2 class="font-semibold">Money in and out</h2></div>
+        <div class="overflow-x-auto max-h-96"><table class="tbl">
+          <thead><tr><th>Date</th><th>What</th><th>Khaata</th><th class="text-right">Amount</th><th></th></tr></thead>
+          <tbody>${d.entries.slice().reverse().map((e: any) => `<tr>
+            <td class="whitespace-nowrap">${e.on_date}</td><td>${KIND[e.kind]}${e.note ? `<span class="block text-xs text-muted">${esc(e.note)}</span>` : ''}</td>
+            <td>${esc(e.supplier_name || '')}</td><td class="num">${num(e.amount)}</td>
+            <td class="text-right">${can('owner') ? `<button class="text-xs text-muted hover:text-bad" data-del-entry="${e.id}">Delete</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-6">No money recorded yet. Use “Money in / out” to record what was invested or paid.</td></tr>'}</tbody>
+        </table></div>
+      </section>
+    </div>`;
+    if (!themed) { themed = true; onTheme(chart); } else chart();
+  }
+
+  function chart() {
+    const ks = d.khaatas.slice(0, 3).map((k: any) => k.supplier_id);
+    const months = d.months.map((m: any) => m.month);
+    const sets = ks.map((sid: number, n: number) => ({
+      label: d.khaatas[n].supplier_name, stack: 'e', backgroundColor: series(n + 1), borderColor: 'transparent',
+      data: months.map((m: string) => d.rows.filter((r: any) => r.month === m && r.supplier_id === sid).reduce((s: number, r: any) => s + r.earned, 0)),
+    }));
+    if (d.khaatas.length > 3) sets.push({
+      label: 'Other khaatas', stack: 'e', backgroundColor: series(4), borderColor: 'transparent',
+      data: months.map((m: string) => d.rows.filter((r: any) => r.month === m && !ks.includes(r.supplier_id)).reduce((s: number, r: any) => s + r.earned, 0)),
+    });
+    makeChart(document.getElementById('c-months') as HTMLCanvasElement, {
+      type: 'bar', data: { labels: months.map(monthShort), datasets: sets },
+      options: { scales: { x: { stacked: true }, y: { stacked: true } } } as any,
+    }, { money: true, legend: sets.length > 1 });
+  }
+
+  const supOptions = (sel?: number | null, blank = false) =>
+    (blank ? '<option value="">— none —</option>' : '') + suppliers.map((s) => `<option value="${s.id}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+
+  async function load() {
+    [d, suppliers] = await Promise.all([api(`/investors/${id}`), api('/suppliers', { params: { include_inactive: true } })]);
+    document.title = `${d.investor.name} · PetalBoard`;
+    render();
+  }
+
+  page.addEventListener('click', async (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
+    if (!btn) return;
+    if (btn.id === 'dl') return download(`/export/investor/${id}.xlsx`, btn);
+    if (btn.id === 'edit') {
+      const i = d.investor;
+      const v = await dialog('Edit investor', `
+        <div><label class="label">Name</label><input name="name" class="input" value="${esc(i.name)}" required /></div>
+        <div><label class="label">Phone</label><input name="phone" class="input" value="${esc(i.phone || '')}" /></div>
+        <div><label class="label">Notes</label><textarea name="notes" class="input" rows="2">${esc(i.notes || '')}</textarea></div>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="active" value="1" ${i.active ? 'checked' : ''} /> Active</label>`);
+      if (v) await busy(btn, async () => {
+        await api(`/investors/${id}`, { method: 'PATCH', body: { name: v.name, phone: v.phone || null, notes: v.notes || null, active: !!v.active } });
+        toast('Saved'); load();
+      });
+    }
+    if (btn.id === 'share') {
+      const v = await dialog('Share in a khaata', `
+        <div><label class="label">Khaata (supplier)</label><select name="supplier_id" class="input">${supOptions()}</select></div>
+        <div><label class="label">Share of the commission (%)</label><input name="pct" type="number" step="0.01" min="0.01" max="100" class="input" required /></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">From month</label><input name="from_month" type="month" class="input" value="${thisMonth()}" required /></div>
+          <div><label class="label">Until month (empty = running)</label><input name="to_month" type="month" class="input" /></div>
+        </div>
+        <div><label class="label">Note</label><input name="note" class="input" /></div>
+        <p class="text-xs text-muted">To change the % from a month on, end the old share the month before and add a new one.</p>`, 'Add share');
+      if (v) await busy(btn, async () => {
+        await api('/khaata-shares', { method: 'POST', body: { supplier_id: Number(v.supplier_id), investor_id: id, pct: Number(v.pct),
+          from_month: v.from_month, to_month: v.to_month || null, note: v.note || null } });
+        toast('Share added'); load();
+      });
+    }
+    if (btn.dataset.editShare) {
+      const s = d.shares.find((x: any) => String(x.id) === btn.dataset.editShare);
+      const v = await dialog(`Share in ${s.supplier_name}`, `
+        <div><label class="label">Share (%)</label><input name="pct" type="number" step="0.01" min="0.01" max="100" class="input" value="${s.pct}" /></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">From month</label><input name="from_month" type="month" class="input" value="${s.from_month}" /></div>
+          <div><label class="label">Until month</label><input name="to_month" type="month" class="input" value="${s.to_month || ''}" /></div>
+        </div>
+        <div><label class="label">Note</label><input name="note" class="input" value="${esc(s.note || '')}" /></div>`);
+      if (v) await busy(btn, async () => {
+        await api(`/khaata-shares/${s.id}`, { method: 'PATCH', body: { pct: Number(v.pct), from_month: v.from_month, to_month: v.to_month || null, note: v.note || null } });
+        toast('Saved'); load();
+      });
+    }
+    if (btn.dataset.delShare) {
+      if (await dialog('Delete this share?', '<p class="text-sm text-muted">The earnings from this khaata disappear from the investor. Only for mistakes.</p>', 'Delete', true))
+        await busy(btn, async () => { await api(`/khaata-shares/${btn.dataset.delShare}`, { method: 'DELETE' }); toast('Deleted'); load(); });
+    }
+    if (btn.id === 'money') {
+      const v = await dialog('Money in / out', `
+        <div><label class="label">What happened</label><select name="kind" class="input">
+          <option value="invested">${esc(d.investor.name)} invested money</option>
+          <option value="payout">Profit paid to ${esc(d.investor.name)}</option>
+          <option value="withdrawn">${esc(d.investor.name)} took capital back</option></select></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Amount (Rs)</label><input name="amount" type="number" min="1" class="input" required /></div>
+          <div><label class="label">Date</label><input name="on_date" type="date" class="input" value="${today()}" required /></div>
+        </div>
+        <div><label class="label">Khaata (optional)</label><select name="supplier_id" class="input">${supOptions(null, true)}</select></div>
+        <div><label class="label">Note</label><input name="note" class="input" /></div>`);
+      if (v) await busy(btn, async () => {
+        await api(`/investors/${id}/entries`, { method: 'POST', body: { kind: v.kind, amount: Number(v.amount), on_date: v.on_date,
+          supplier_id: v.supplier_id ? Number(v.supplier_id) : null, note: v.note || null } });
+        toast('Saved'); load();
+      });
+    }
+    if (btn.dataset.delEntry) {
+      if (await dialog('Delete this entry?', '<p class="text-sm text-muted">Only for mistakes.</p>', 'Delete', true))
+        await busy(btn, async () => { await api(`/investor-entries/${btn.dataset.delEntry}`, { method: 'DELETE' }); toast('Deleted'); load(); });
+    }
+  });
+
+  if (!id) page.innerHTML = '<p class="text-bad">No investor chosen.</p>';
+  else load().catch((e) => (page.innerHTML = `<p class="text-bad">${esc(e.message)}</p>`));
+</script>

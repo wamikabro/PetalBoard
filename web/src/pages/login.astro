@@ -1,0 +1,57 @@
+---
+import App from '../layouts/App.astro';
+---
+<App title="Log in" bare>
+  <div class="min-h-screen grid lg:grid-cols-2">
+    <div class="hidden lg:flex flex-col justify-between p-12 text-white" style="background: linear-gradient(135deg, #1e3a8a 0%, #4c2a85 40%, #9d2668 100%);">
+      <div class="flex items-center gap-3"><img src="/favicon.svg" alt="" class="w-10 h-10" /><span class="text-xl font-semibold">PetalBoard</span></div>
+      <div>
+        <p class="urdu text-5xl font-bold text-[#ffd21f] leading-[1.8]" style="-webkit-text-stroke:1px #3a1a00">توقیر احمد فلاور ہاؤس</p>
+        <p class="mt-4 text-lg text-white/80 max-w-md">Daily flower purchases, supplier bills and month-end settlement, all in one place.</p>
+      </div>
+      <p class="text-sm text-white/60">Pakistan Chowk, Hyderabad</p>
+    </div>
+    <div class="flex items-center justify-center p-6">
+      <form id="login" class="w-full max-w-sm space-y-5">
+        <div class="lg:hidden flex items-center gap-2 mb-6"><img src="/favicon.svg" alt="" class="w-9 h-9" /><span class="text-xl font-semibold">PetalBoard</span></div>
+        <div>
+          <h1 class="h-title">Welcome back</h1>
+          <p class="text-sm text-muted mt-1">Log in to enter today's flowers.</p>
+        </div>
+        <div>
+          <label class="label" for="username">Username</label>
+          <input class="input" id="username" name="username" autocomplete="username" required />
+        </div>
+        <div>
+          <label class="label" for="password">Password</label>
+          <input class="input" id="password" name="password" type="password" autocomplete="current-password" required />
+        </div>
+        <p id="err" class="text-sm text-bad hidden" role="alert"></p>
+        <button class="btn-primary w-full !py-2.5" type="submit">Log in</button>
+      </form>
+    </div>
+  </div>
+</App>
+
+<script>
+  import { api, saveLogin } from '../lib/api';
+  const form = document.getElementById('login') as HTMLFormElement;
+  const err = document.getElementById('err')!;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button')!;
+    btn.disabled = true;
+    err.classList.add('hidden');
+    try {
+      const fd = new FormData(form);
+      const r = await api('/auth/login', { method: 'POST', body: { username: fd.get('username'), password: fd.get('password') } });
+      saveLogin(r.token, r.user);
+      const next = new URLSearchParams(location.search).get('next');
+      location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
+    } catch (ex: any) {
+      err.textContent = ex.message;
+      err.classList.remove('hidden');
+      btn.disabled = false;
+    }
+  });
+</script>
