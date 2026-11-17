@@ -1,151 +1,53 @@
-/* The paper bill. Fixed light colours: it is a printed form, in light and dark mode alike. */
+/* The paper bill: the shop's printed form (public/bill/empty-bill.jpg) with the entries written on top.
+   Positions come from billsheet.ts as percentages of the image, so the sheet scales to any width.
+   Fixed light colours: it is a printed form, in light and dark mode alike. */
 .bs-sheet {
-  --bs-navy: #23356f;
   --bs-ink: #1f3fa6;          /* ballpoint blue */
-  --bs-rule: #2b2b2b;
-  --bs-box: #9aa4b8;
+  position: relative;
   width: 100%;
   max-width: 820px;
+  aspect-ratio: 1132 / 1600;
   margin: 0 auto;
-  background: #fffefb;
-  color: #111;
-  font-family: Inter, system-ui, sans-serif;
-  border-radius: 6px;
-  box-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 12px 32px -12px rgb(0 0 0 / .25);
-  overflow: hidden;
-  container-type: inline-size;
-}
-.bs-sheet .urdu { font-family: "Noto Nastaliq Urdu", serif; line-height: 1.9; }
-.bs-ink { font-family: Kalam, "Segoe Print", cursive; color: var(--bs-ink); font-weight: 400; }
-
-/* Header banner */
-.bs-head {
-  background: linear-gradient(105deg, #1e3a8a 0%, #4c2a85 35%, #7b2d6b 70%, #a0304d 100%);
-  padding: 2.2cqw 2.4cqw 1.6cqw;
-  position: relative;
-}
-.bs-shop {
-  margin: 0;
-  font-size: 7.4cqw;
-  font-weight: 700;
-  color: #ffd21f;
-  text-align: center;
-  line-height: 1.5;
-  -webkit-text-stroke: .25cqw #3a1a00;
-  paint-order: stroke fill;
-  text-shadow: 0 .4cqw 0 #3a1a00;
-}
-.bs-tagline {
-  margin: .6cqw auto 0;
-  background: #f4f4f8;
-  color: #111;
-  border-radius: 99px;
-  padding: .1cqw 2cqw;
-  font-size: 1.55cqw;
-  text-align: center;
-  width: fit-content;
-  max-width: 96%;
-}
-.bs-head-pics { direction: ltr; display: flex; gap: 1.2cqw; align-items: center; justify-content: center; margin-top: 1.2cqw; }
-.bs-pic { width: 9cqw; height: 10cqw; border-radius: .8cqw; overflow: hidden; border: .3cqw solid #fff; }
-.bs-pic svg, .bs-wreaths svg { width: 100%; height: 100%; display: block; }
-.bs-car { width: 18cqw; border-radius: 50%; height: 12cqw; }
-.bs-wreaths { width: 18cqw; height: 8cqw; }
-.bs-address {
-  margin: 1cqw 0 0 auto;
   background: #fff;
-  color: #111;
-  border-radius: 1cqw;
-  padding: 0 2cqw;
-  font-size: 1.9cqw;
-  font-weight: 700;
-  width: fit-content;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 12px 32px -12px rgb(0 0 0 / .25);
+  container-type: inline-size;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
 }
+.bs-form { position: absolute; inset: 0; width: 100%; height: 100%; display: block; user-select: none; pointer-events: none; }
 
-/* Name / month fields */
-.bs-fields { display: grid; grid-template-columns: 1fr 34%; gap: 2cqw; padding: 2cqw 2.4cqw .8cqw; }
-.bs-field { display: flex; align-items: center; gap: 1cqw; font-size: 2.2cqw; font-weight: 700; }
-.bs-box {
-  flex: 1;
-  border: .2cqw solid var(--bs-box);
-  border-radius: 1.2cqw;
-  min-height: 4.4cqw;
+.bs-at {
+  position: absolute;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 2cqw;
-  padding: 0 2cqw;
-  font-size: 2.6cqw;
-}
-.bs-flower { font-size: 2.2cqw; color: var(--bs-ink); }
-
-/* Body: table on the right, summary panel on the left (RTL) */
-.bs-body { display: grid; grid-template-columns: 1fr 34%; gap: 2cqw; padding: 0 2.4cqw 2.4cqw; }
-.bs-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 1.9cqw; }
-.bs-table th {
-  background: var(--bs-navy);
-  color: #ffd21f;
-  font-weight: 700;
-  font-size: 1.9cqw;
-  padding: .2cqw 0;
-  border: .15cqw solid var(--bs-navy);
-}
-.bs-table td {
-  border: .12cqw solid var(--bs-rule);
-  height: 3.05cqw;
-  padding: 0 .6cqw;
-  text-align: center;
-  white-space: nowrap;
   overflow: hidden;
-  font-size: 2.05cqw;
+  white-space: nowrap;
   line-height: 1;
 }
-.bs-table td.bs-date { font-family: Arial, sans-serif; font-size: 1.8cqw; color: #111; direction: ltr; }
-.bs-table td.bs-kh { font-size: 1.85cqw; direction: ltr; }
-.bs-table td sup { font-size: .7em; }
-.bs-table tr.bs-off td { background: #f1f0ec; }
-.bs-table tr.bs-off td.bs-date { color: #b9b6ad; text-decoration: line-through; }
-.bs-table td.bs-flag { background: #fff3c4; }
-.bs-table tr:last-child td { height: 3.4cqw; }
+.bs-line { align-items: flex-end; padding-bottom: .5cqw; }
 
-.bs-side { display: flex; flex-direction: column; gap: 1.6cqw; }
-.bs-owners p { margin: 0; }
-.bs-prop {
-  background: #e0453c;
-  color: #fff;
-  border-radius: 99px;
-  padding: 0 1.2cqw;
-  font-size: 1.5cqw;
+.bs-ink {
+  font-family: Kalam, "Segoe Print", cursive;
+  color: var(--bs-ink);
+  font-size: 2.35cqw;
+  direction: ltr;
 }
-.bs-owner { font-size: 3cqw; font-weight: 700; }
-.bs-phone { font-size: 3.1cqw; font-weight: 700; letter-spacing: -.02em; display: flex; align-items: center; gap: 1cqw; justify-content: flex-end; font-family: Arial, sans-serif; }
-.bs-wa { width: 3cqw; height: 3cqw; flex: none; }
-.bs-adv { display: flex; align-items: center; gap: 1cqw; font-size: 1.8cqw; font-weight: 700; margin-top: 1cqw; }
-.bs-sum { width: 100%; border-collapse: collapse; }
-.bs-sum th { width: 30%; text-align: center; font-size: 1.6cqw; font-weight: 700; border-bottom: .12cqw solid var(--bs-rule); border-left: .12cqw solid var(--bs-rule); }
-.bs-sum td { height: 4.6cqw; text-align: center; font-size: 2.6cqw; border-bottom: .12cqw solid var(--bs-rule); }
-.bs-deco { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 18cqw; }
-.bs-roses { width: 80%; opacity: .9; }
-.bs-final {
-  border: .2cqw solid var(--bs-box);
-  border-radius: 1.6cqw;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1cqw 2cqw;
-  font-size: 3.2cqw;
-  font-weight: 700;
-}
-.bs-final .bs-ink { font-size: 3.4cqw; }
-.bs-settle { margin: -0.6cqw 0 0; font-size: 1.8cqw; text-align: center; }
-.bs-sign { display: flex; align-items: flex-end; gap: 1cqw; font-size: 1.8cqw; font-weight: 700; }
-.bs-line { flex: 1; border-bottom: .15cqw solid var(--bs-rule); height: 3cqw; }
+.bs-ink sup { font-size: .65em; }
+.bs-line .bs-ink { font-size: 2.9cqw; }
+.bs-ink.bs-ur { font-family: "Noto Nastaliq Urdu", serif; font-size: 2.3cqw; direction: rtl; line-height: 2; }
+.bs-ink.bs-small { font-size: 1.85cqw; }
+.bs-ink.bs-big { font-size: 3.6cqw; }
 
-/* Print: one bill per A4 page, no shadows */
+/* Day numbers beyond the month's last day (30 Sep, 29-31 Feb): a light pencil strike */
+.bs-off { background: linear-gradient(to top right, transparent calc(50% - 1px), rgb(150 120 140 / .55), transparent calc(50% + 1px)); }
+/* A day whose written amount is not weight x rate (screen only) */
+.bs-flag { background: rgb(255 214 0 / .28); }
+
 @media print {
-  .bs-sheet { box-shadow: none; border-radius: 0; max-width: none; width: 178mm; }
-  .bs-sheet, .bs-head, .bs-table th, .bs-prop, .bs-table tr.bs-off td, .bs-table td.bs-flag {
-    -webkit-print-color-adjust: exact; print-color-adjust: exact;
-  }
-  .bs-table td.bs-flag { background: none; }
+  .bs-sheet { box-shadow: none; border-radius: 0; max-width: none; width: 194mm; }
+  .bs-flag { background: none; }
 }
