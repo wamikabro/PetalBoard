@@ -143,7 +143,7 @@
 
 /* Print: one bill per A4 page, no shadows */
 @media print {
-  .bs-sheet { box-shadow: none; border-radius: 0; max-width: none; width: 194mm; }
+  .bs-sheet { box-shadow: none; border-radius: 0; max-width: none; width: 178mm; }
   .bs-sheet, .bs-head, .bs-table th, .bs-prop, .bs-table tr.bs-off td, .bs-table td.bs-flag {
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }

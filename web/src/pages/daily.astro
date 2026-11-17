@@ -38,7 +38,7 @@ import App from '../layouts/App.astro';
           <button data-show="done" class="px-3 py-2 border-l border-line">Entered</button>
         </div>
       </div>
-      <div class="flex gap-2 items-end" id="rate-fill">
+      <div class="flex flex-wrap gap-2 items-end" id="rate-fill">
         <div>
           <label class="label" for="fill-flower">Today's rate for</label>
           <select id="fill-flower" class="input !w-32"></select>
@@ -110,7 +110,7 @@ import App from '../layouts/App.astro';
       t('Flowers bought', `${kg(Math.round(w * 100) / 100)} kg`) +
       t('Amount', rs(a)) +
       t('Average rate', w ? `Rs ${(a / w).toFixed(0)}` : '—', 'per kg') +
-      t('Kharcha given', rs(k));
+      t('Kharcha given', rs(k)).replace('class="card card-pad"', 'class="card card-pad col-span-2 md:col-span-1"');
   }
 
   function stateDot(r: Row) {

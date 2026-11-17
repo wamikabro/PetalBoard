@@ -127,4 +127,6 @@ input[type=number] { -moz-appearance: textfield; }
   .no-print { display: none !important; }
   .print-page { break-after: page; }
   .print-page:last-child { break-after: auto; }
+  main { padding: 0 !important; margin: 0 !important; max-width: none !important; }
+  .pb-20 { padding-bottom: 0 !important; }
 }

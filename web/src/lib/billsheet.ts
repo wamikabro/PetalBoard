@@ -2,6 +2,9 @@
 // Used by the bill page and the "print all bills" page. Styles: src/styles/billsheet.css.
 import { esc, kg, num } from './format';
 
+/** Day cells are written plain on paper: 1105, not 1,105. */
+const plain = (v: number | null | undefined) => (v === null || v === undefined ? '' : String(v));
+
 export type Settings = {
   name_ur: string; name_en: string; tagline_ur: string; address_ur: string; proprietor_label_ur: string;
   proprietor1_name_ur: string; proprietor1_phone: string; proprietor2_name_ur: string; proprietor2_phone: string;
@@ -61,9 +64,9 @@ function cell(v: string, cls = '') {
 
 function kharchaCell(d: Day, opening: number): string {
   const parts: string[] = [];
-  if (d.day === 1 && opening > 0) parts.push(num(opening));
+  if (d.day === 1 && opening > 0) parts.push(plain(opening));
   for (const k of d.kharcha) {
-    parts.push(num(k.amount) + (k.tag ? `<sup>${esc(k.tag)}</sup>` : ''));
+    parts.push(plain(k.amount) + (k.tag ? `<sup>${esc(k.tag)}</sup>` : ''));
   }
   return parts.join('+');
 }
@@ -91,8 +94,8 @@ export function billSheetHtml(bill: Bill, s: Settings): string {
     rows.push(`<tr>
       <td class="bs-date">${day}</td>
       ${cell(supplied ? kg(d.weight) : '')}
-      ${cell(supplied ? num(d.rate) : '')}
-      ${cell(supplied ? num(d.amount) : '', d.mismatch !== undefined ? 'bs-flag' : '')}
+      ${cell(supplied ? plain(d.rate) : '')}
+      ${cell(supplied ? plain(d.amount) : '', d.mismatch !== undefined ? 'bs-flag' : '')}
       ${cell(kharchaCell(d, bill.opening_due), 'bs-kh')}
     </tr>`);
   }
