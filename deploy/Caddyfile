@@ -1,0 +1,10 @@
+# PetalBoard API behind automatic HTTPS. {DOMAIN} is filled in by setup.sh.
+{DOMAIN} {
+	encode gzip
+	reverse_proxy 127.0.0.1:8000
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+}

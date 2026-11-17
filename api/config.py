@@ -11,4 +11,5 @@ ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
-SESSION_DAYS = int(os.environ.get("SESSION_DAYS", "30"))
+# A login stays valid on its device until it goes unused for this many days (each use renews it).
+SESSION_DAYS = int(os.environ.get("SESSION_DAYS", "365"))

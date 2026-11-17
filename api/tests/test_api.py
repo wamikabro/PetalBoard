@@ -172,3 +172,13 @@ def test_exports(client):
     assert client.get(f"/export/supplier/{sid}.xlsx").status_code == 200
     iid = client.get("/investors").json()[0]["id"]
     assert client.get(f"/export/investor/{iid}.xlsx").status_code == 200
+
+
+def test_session_renews_on_use(client):
+    import db
+    with db.transaction() as conn:
+        conn.execute("UPDATE sessions SET expires_at = now() + interval '1 day'")
+    assert client.get("/auth/me").status_code == 200
+    with db.transaction() as conn:
+        left = conn.execute("SELECT expires_at - now() AS d FROM sessions ORDER BY last_seen DESC NULLS LAST LIMIT 1").fetchone()["d"]
+    assert left.days >= 300

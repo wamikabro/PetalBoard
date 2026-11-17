@@ -67,7 +67,11 @@ def current_user(authorization: str | None = Header(default=None)) -> dict:
         ).fetchone()
         if not user:
             raise HTTPException(401, "Session expired, log in again")
-        conn.execute("UPDATE sessions SET last_seen = now() WHERE token_hash = %s", (user["token_hash"],))
+        # Sliding expiry: every use pushes the end date forward, so a device that is used stays logged in.
+        conn.execute(
+            "UPDATE sessions SET last_seen = now(), expires_at = now() + make_interval(days => %s) WHERE token_hash = %s",
+            (config.SESSION_DAYS, user["token_hash"]),
+        )
     user.pop("token_hash")
     user["token"] = token
     return user
