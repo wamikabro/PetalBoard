@@ -84,7 +84,9 @@ export function billSheetHtml(bill: Bill, _s?: Settings): string {
   const t = bill.totals;
   const parts: string[] = [];
 
-  parts.push(at(BOX.name, `${ink(esc(bill.supplier.name))}${bill.flower?.name_ur ? ink(esc(bill.flower.name_ur), 'bs-ur') : ''}`, 'bs-line'));
+  // "Ajaz (Genda)" is written on paper as "Ajaz" with the flower beside it.
+  const paperName = bill.flower?.name_ur ? bill.supplier.name.replace(/\s*\([^)]*\)\s*$/, '') : bill.supplier.name;
+  parts.push(at(BOX.name, `${ink(esc(paperName))}${bill.flower?.name_ur ? ink(esc(bill.flower.name_ur), 'bs-ur') : ''}`, 'bs-line'));
   parts.push(at(BOX.month, ink(`${MONTH_SHORT[m - 1]} ${y}`), 'bs-line'));
 
   for (let day = 1; day <= 31; day++) {
