@@ -63,6 +63,12 @@
     transform: translate(var(--blank-dx, 0), var(--blank-dy, 0)) scale(var(--blank-scale, 1));
     transform-origin: top left;
   }
+  /* Everything around a full-page sheet must take no room, or the page overflows into an empty one. */
+  body:not(.print-full) :has(.bs-sheet) {
+    display: block !important; margin: 0 !important; padding: 0 !important; gap: 0 !important;
+    min-height: 0 !important; height: auto !important; border: 0 !important;
+  }
+  body:not(.print-full) .bs-sheet { margin-bottom: -2mm; break-inside: avoid; }
   body:not(.print-full) .bs-form { display: none; }
   body:not(.print-full) .bs-off { background: none; }
 }
