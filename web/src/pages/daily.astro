@@ -254,14 +254,32 @@ import App from '../layouts/App.astro';
     }
   });
 
+  /** Save the kharcha typed in a row (if any) and clear the box so it cannot be added twice. */
+  function addTypedKharcha(el: HTMLElement): boolean {
+    const amtInput = el.querySelector<HTMLInputElement>('[data-f="kharcha"]');
+    const tagInput = el.querySelector<HTMLInputElement>('[data-f="tag"]');
+    const amount = Number(amtInput?.value);
+    if (!amtInput || !amount) return false;
+    const tag = tagInput?.value.trim() || null;
+    amtInput.value = '';
+    if (tagInput) tagInput.value = '';
+    save(Number(el.dataset.i), { amount, tag });
+    return true;
+  }
+
   rowsBox.addEventListener('focusout', (e) => {
     const inp = e.target as HTMLInputElement;
     const el = inp.closest<HTMLElement>('.row');
     if (!el) return;
     const next = (e as FocusEvent).relatedTarget as HTMLElement | null;
-    if (next && el.contains(next)) return; // still in the same row
     const i = Number(el.dataset.i);
     const r = rows[i];
+    // A kharcha typed but not yet added (no Enter): add it when leaving the kharcha/tag boxes.
+    if (inp.dataset.f === 'kharcha' || inp.dataset.f === 'tag') {
+      if (next && (next.dataset.f === 'kharcha' || next.dataset.f === 'tag' || next.hasAttribute('data-add-k'))) return;
+      if (addTypedKharcha(el)) return; // also saves the row's weight and rate
+    }
+    if (next && el.contains(next)) return; // still in the same row
     if (r._state !== 'dirty') return;
     if (r.weight == null && r.rate != null) {
       // Only a rate, no weight: nothing was bought. Keep the rate on screen, nothing to save
@@ -281,12 +299,7 @@ import App from '../layouts/App.astro';
     if (inp.dataset.f === 'kharcha' || inp.dataset.f === 'tag') {
       if (e.key === 'Enter') {
         e.preventDefault();
-        const amtInput = el.querySelector<HTMLInputElement>('[data-f="kharcha"]')!;
-        const tagInput = el.querySelector<HTMLInputElement>('[data-f="tag"]')!;
-        const amount = Number(amtInput.value);
-        if (!amount) return;
-        const i = Number(el.dataset.i);
-        save(i, { amount, tag: tagInput.value.trim() || null });
+        addTypedKharcha(el);
       }
       return;
     }
@@ -302,9 +315,7 @@ import App from '../layouts/App.astro';
     const add = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-add-k]');
     if (!add) return;
     const el = add.closest<HTMLElement>('.row')!;
-    const amount = Number(el.querySelector<HTMLInputElement>('[data-f="kharcha"]')!.value);
-    if (!amount) return toast('Type the kharcha amount first', 'error');
-    save(Number(el.dataset.i), { amount, tag: el.querySelector<HTMLInputElement>('[data-f="tag"]')!.value.trim() || null });
+    if (!addTypedKharcha(el)) toast('Type the kharcha amount first', 'error');
   });
 
   rowsBox.addEventListener('click', async (e) => {

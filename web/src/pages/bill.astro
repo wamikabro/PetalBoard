@@ -94,7 +94,7 @@ import App from '../layouts/App.astro';
           <td class="px-3 py-2 num">${num(t.total)}</td><td class="px-3 py-2">${num(t.kharcha)}</td><td class="wide-only"></td><td></td></tr></tfoot>
       </table>
     </div>
-    <p class="text-xs text-muted no-print hidden sm:block">Each day saves when you leave it. Enter kharcha and press Enter to add it; several on one day show as 1250+200 on the bill.</p>`;
+    <p class="text-xs text-muted no-print hidden sm:block">Each day saves when you leave it. Kharcha is added when you press Enter (to add a tag) or leave the box; several on one day show as 1250+200 on the bill.</p>`;
   }
 
   function render() {
@@ -164,6 +164,20 @@ import App from '../layouts/App.astro';
     const tr = inp.closest<HTMLElement>('tr[data-day]');
     if (!tr) return;
     const nxt = (e as FocusEvent).relatedTarget as HTMLElement | null;
+    // A kharcha typed but not added with Enter: add it when leaving the box.
+    if (inp.dataset.f === 'kharcha' && Number(inp.value)) {
+      const amount = Number(inp.value), kday = Number(tr.dataset.day);
+      inp.value = '';
+      try {
+        bill = await api(`/bills/${id}/kharcha`, { method: 'POST', body: { day: kday, amount, tag: null, note: null } });
+        const focusDay = nxt?.closest<HTMLElement>('tr[data-day]')?.dataset.day;
+        const focusField = nxt?.dataset.f;
+        render();
+        if (focusDay && focusField) page.querySelector<HTMLInputElement>(`tr[data-day="${focusDay}"] [data-f="${focusField}"]`)?.focus();
+        toast(`Kharcha ${num(amount)} added`);
+      } catch (ex: any) { inp.value = String(amount); toast(ex.message, 'error'); }
+      return;
+    }
     if (nxt && tr.contains(nxt)) return;
     const day = Number(tr.dataset.day);
     if (!dirty.has(day)) return;
@@ -193,10 +207,11 @@ import App from '../layouts/App.astro';
       const amount = Number(inp.value);
       if (!amount) return;
       const day = Number(tr.dataset.day);
+      inp.value = ''; // the dialog takes focus; don't let the leave-the-box save add it too
       const tag = (await dialog(`Kharcha ${num(amount)} on day ${day}`, `
         <div><label class="label">Tag (optional, the small letter written beside it, e.g. B)</label><input name="tag" class="input" maxlength="4" /></div>
         <div><label class="label">Note (optional)</label><input name="note" class="input" /></div>`, 'Add'));
-      if (!tag) return;
+      if (!tag) { inp.value = String(amount); return; }
       try {
         bill = await api(`/bills/${id}/kharcha`, { method: 'POST', body: { day, amount, tag: tag.tag || null, note: tag.note || null } });
         render();
