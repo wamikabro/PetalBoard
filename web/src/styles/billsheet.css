@@ -52,17 +52,17 @@
   .bs-flag { background: none; }
 }
 
-/* "Numbers only" (lib/blankprint.ts): no form picture, full A4 page with no margin, so the entries land
-   in the boxes of an already printed blank form. Shift and size come from the print dialog. */
+/* Printing is "numbers only" by default (lib/blankprint.ts): no form picture, full A4 page with no margin,
+   so the entries land in the boxes of an already printed blank form. body.print-full prints the design. */
 @page blankform { size: A4; margin: 0; }
 @media print {
-  body.print-blank .bs-sheet {
+  body:not(.print-full) .bs-sheet {
     page: blankform;
     width: 210mm; height: 297mm; max-width: none; aspect-ratio: auto; margin: 0;
     background: transparent; overflow: visible;
     transform: translate(var(--blank-dx, 0), var(--blank-dy, 0)) scale(var(--blank-scale, 1));
     transform-origin: top left;
   }
-  body.print-blank .bs-form { display: none; }
-  body.print-blank .bs-off { background: none; }
+  body:not(.print-full) .bs-form { display: none; }
+  body:not(.print-full) .bs-off { background: none; }
 }
