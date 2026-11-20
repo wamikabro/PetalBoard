@@ -11,6 +11,7 @@ import App from '../layouts/App.astro';
     <div class="flex gap-2 items-end">
       <div><label class="label" for="which">Which bills</label>
         <select id="which" class="input"><option value="all">All</option><option value="supplied">With flowers this month</option><option value="neg">Supplier owes shop</option><option value="pos">Shop owes supplier</option></select></div>
+      <button class="btn-ghost" id="print-blank" title="Only the entries, for printing onto the shop's printed blank forms">Numbers only</button>
       <button class="btn-primary" id="print">Print / Save PDF</button>
     </div>
   </div>
@@ -20,6 +21,7 @@ import App from '../layouts/App.astro';
 
 <script>
   import { api } from '../lib/api';
+  import { printNumbersOnly } from '../lib/blankprint';
   import { billSheetHtml } from '../lib/billsheet';
   import { esc, monthName } from '../lib/format';
   import { qp } from '../lib/ui';
@@ -59,4 +61,5 @@ import App from '../layouts/App.astro';
   })();
   document.getElementById('which')!.addEventListener('change', render);
   document.getElementById('print')!.addEventListener('click', () => window.print());
+  document.getElementById('print-blank')!.addEventListener('click', () => printNumbersOnly());
 </script>

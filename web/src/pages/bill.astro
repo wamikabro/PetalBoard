@@ -9,6 +9,7 @@ import App from '../layouts/App.astro';
 
 <script>
   import { api, can } from '../lib/api';
+  import { printNumbersOnly } from '../lib/blankprint';
   import { billSheetHtml, type Bill, type Settings } from '../lib/billsheet';
   import { balanceWords, esc, kg, monthName, num, rs, rsSigned } from '../lib/format';
   import { busy, dialog, qp, setQuery, toast } from '../lib/ui';
@@ -114,6 +115,7 @@ import App from '../layouts/App.astro';
         <a class="btn-ghost ${nb.prev ? '' : 'pointer-events-none opacity-40'}" href="/bill?id=${nb.prev}&tab=${tab}" aria-label="Previous supplier">←</a>
         <a class="btn-ghost ${nb.next ? '' : 'pointer-events-none opacity-40'}" href="/bill?id=${nb.next}&tab=${tab}" aria-label="Next supplier">→</a>
         <button class="btn-ghost" id="print"><svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M19 8H5a3 3 0 0 0-3 3v6h4v4h12v-4h4v-6a3 3 0 0 0-3-3zm-3 11H8v-5h8zm3-7a1 1 0 1 1 1-1 1 1 0 0 1-1 1zm-1-9H6v4h12z"/></svg>Print / PDF</button>
+        <button class="btn-ghost" id="print-blank" title="Only the entries, for printing onto the shop's printed blank forms">Numbers only</button>
         ${can('manager') ? (locked
           ? `<button class="btn-ghost" id="reopen">Reopen</button>`
           : `<button class="btn-ghost" id="settings-btn">Bill settings</button><button class="btn-primary" id="close">Close month</button>`) : ''}
@@ -239,6 +241,7 @@ import App from '../layouts/App.astro';
     const btn = el.closest<HTMLButtonElement>('button');
     if (!btn) return;
     if (btn.id === 'print') window.print();
+    if (btn.id === 'print-blank') printNumbersOnly();
     if (btn.id === 'reopen') {
       const ok = await dialog('Reopen this bill?', '<p class="text-sm text-muted">The settlement is removed and next month\'s opening balance goes back to zero until you close it again.</p>', 'Reopen');
       if (ok) await busy(btn, async () => { bill = await api(`/bills/${id}/reopen`, { method: 'POST' }); render(); toast('Bill reopened'); });
