@@ -191,19 +191,19 @@ See the "Next steps" in `CLAUDE.md` (owner questions, August 2026, closing month
 
 Owner: "make almost everything work offline". Builds on 4c (daily entry already works offline).
 
-- [ ] 5a. Server: every save may carry `X-Change-Id` (made on the device). The first time it is applied in the
-      same database transaction as the change and remembered with its answer; sent again, the same answer comes
-      back and nothing is applied twice. Works for every POST/PUT/PATCH/DELETE. Tests.
-- [ ] 5b. Phone reads: `/settings`, `/suppliers`, `/suppliers/{id}`, `/investors`, `/investors/{id}` worked out in
-      `local.ts` (today they come from saved pages). `check-local.mjs` covers them (0 differ).
-- [ ] 5c. Phone saves: one outbox for every save. `local.ts` applies each waiting save the way the server will
-      (bill days, kharcha, bill settings, close/reopen month with advance cut and next month's opening, start month,
-      new bill, suppliers, advances, khaata close/renew/reopen, investors, shares, investor entries, flowers, shop
-      details). Things made offline (supplier, investor, bill, share...) get a temporary negative id; when the server
-      answers with the real id, later waiting saves and open pages switch to it.
-- [ ] 5d. Pages use it: bill, bills, supplier(s), investor(s), settings (shop, flowers), daily "New supplier".
-      A save the server refuses later (e.g. the month was closed on another phone) goes to "Sync problems".
-- [ ] 5e. Check: a script makes each kind of save both on the device copy and on a test server and compares
-      every affected answer; headless Chrome run with the API stopped; deploy.
+- [x] 5a. Server: every save may carry `X-Change-Id`. Recorded in `applied_changes` (migration v5) in the same
+      transaction as the change, with its answer; sent again, the first answer comes back (`X-Change-Replayed`).
+      Middleware in `main.py` (CORS stays outermost). Kept 180 days. Test `test_a_save_sent_twice_is_applied_once`.
+- [x] 5b. Phone reads `/settings`, `/suppliers`, `/suppliers/{id}`, `/investors`, `/investors/{id}` (`local.ts`).
+      `check-local.mjs`: 468 answers, 0 differ (the entries report got a fixed order for ties on both sides).
+- [x] 5c. `local.ts` `Writer` applies every kind of waiting save like the server (refusals too). New rows get a
+      temporary negative id (`createdTable`, `createdIds`, `remapItem`); daily entry and start-month answers now
+      list the bills they made. A sent save stays drawn on top until the next update of the device copy.
+- [x] 5d. Pages use `save()`/`submit()` from `outbox.ts`: bill (days go through `/daily` so "later wins" holds there
+      too), bills, daily, supplier(s), investor(s), settings (shop, flowers). Ids known to be real replace temporary
+      ones in new saves and in page addresses (`rememberId`/`realIds` in `api.ts`).
+- [x] 5e. `web/scripts/check-writes.mjs` (needs a throwaway database, see its header): 9 scenarios, 41 answers,
+      0 differ. Headless Chrome with the API stopped: new supplier + advance, daily entry, bill kharcha + day edit +
+      close with a 5,000 cut, new investor + money; reload; API back: all 8 saves arrived once, the database matches.
 
 Stays online only: log in / out, users, restore, backup and Excel downloads (made by the server).

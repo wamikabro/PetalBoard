@@ -14,6 +14,7 @@ import App from '../layouts/App.astro';
   import { billSheetHtml, type Bill, type Settings } from '../lib/billsheet';
   import { balanceWords, esc, kg, monthName, num, rs, rsSigned } from '../lib/format';
   import { busy, dialog, qp, setQuery, toast } from '../lib/ui';
+  import { newId, save, submit } from '../lib/outbox';
 
   const id = Number(qp('id'));
   let tab = (qp('tab') as 'paper' | 'edit') || 'paper';
@@ -76,8 +77,8 @@ import App from '../layouts/App.astro';
     const chip = (amount: number, tag: string | null, extra = '') =>
       `<span class="chip bg-brand-soft text-brand transition-opacity ${extra}">${num(amount)}${tag ? `<sup>${esc(tag)}</sup>` : ''}`;
     const bf = d.day === 1 && bill.opening_due > 0 ? `<span class="chip bg-sunken text-muted" title="Carried from last month">${num(bill.opening_due)} b/f</span>` : '';
-    const kh = d.kharcha.map((k) => `${chip(k.amount, k.tag)}
-        ${locked ? '' : `<button data-del-k="${k.id}" class="px-1 rounded hover:bg-brand/20" aria-label="Remove">×</button>`}</span>`).join('');
+    const kh = d.kharcha.map((k: any, j: number) => `${chip(k.amount, k.tag, k.pending ? 'opacity-60' : '')}
+        ${locked ? '' : `<button data-del-k="${d.day}:${j}" class="px-1 rounded hover:bg-brand/20" aria-label="Remove">×</button>`}</span>`).join('');
     const pend = (pendingK.get(d.day) || []).map((k) => chip(k.amount, k.tag, 'opacity-50') + '</span>').join('');
     return bf + kh + pend;
   }
@@ -193,6 +194,13 @@ import App from '../layouts/App.astro';
   const dirty = new Set<number>();
   let queue: Promise<unknown> = Promise.resolve();
   const enqueue = (job: () => Promise<void>) => (queue = queue.then(job, job));
+  const label = (what: string) => `${bill.supplier.name} · ${monthName(bill.month)}: ${what}`;
+  /** Save (now, or later when offline) and read the bill again. */
+  async function change(method: string, path: string, body: unknown, what: string) {
+    const r = await save(method, path, body, label(what));
+    bill = await api(`/bills/${id}`);
+    return r;
+  }
 
   function rowVals(tr: HTMLElement) {
     const v = (f: string) => (tr.querySelector<HTMLInputElement>(`[data-f="${f}"]`)?.value ?? '').trim();
@@ -208,11 +216,12 @@ import App from '../layouts/App.astro';
     saving.set(day, (saving.get(day) || 0) + 1);
     if (!dirty.has(day)) setState(day, '<span class="text-muted">Saving…</span>');
   }
-  function endSave(day: number, ok: boolean) {
+  function endSave(day: number, ok: boolean, queued = false) {
     const left = Math.max(0, (saving.get(day) || 1) - 1);
     saving.set(day, left);
     if (!ok) return setState(day, '<span class="text-bad">Error</span>');
     if (left || dirty.has(day)) return;
+    if (queued) return setState(day, '<span class="text-warn" title="Kept on this device; sent when the connection is back">Waiting</span>');
     setState(day, '<span class="text-good">✓</span>');
     setTimeout(() => { if (!dirty.has(day) && !saving.get(day)) setState(day, ''); }, 1500);
   }
@@ -238,8 +247,10 @@ import App from '../layouts/App.astro';
     const unpend = () => pendingK.set(day, (pendingK.get(day) || []).filter((p) => p.key !== key));
     enqueue(async () => {
       try {
-        bill = await api(`/bills/${id}/kharcha`, { method: 'POST', body: { day, amount: k.amount, tag: k.tag, note: null } });
-        unpend(); applyBill(); endSave(day, true);
+        const { queued } = await save('POST', `/bills/${id}/kharcha`, { day, amount: k.amount, tag: k.tag, note: null, client_id: newId() },
+          label(`day ${day} kharcha ${k.amount}${k.tag || ''}`));
+        bill = await api(`/bills/${id}`);
+        unpend(); applyBill(); endSave(day, true, queued);
       } catch (ex: any) {
         unpend(); applyBill(); endSave(day, false);
         const box = rowOf(day)?.querySelector<HTMLInputElement>('[data-f="kharcha"]');
@@ -259,8 +270,16 @@ import App from '../layouts/App.astro';
     startSave(day);
     enqueue(async () => {
       try {
-        bill = await api(`/bills/${id}/days/${day}`, { method: 'PUT', body: { weight, rate, note } });
-        applyBill(); endSave(day, true);
+        // Through the daily entry, so two phones changing the same day keep the change made later.
+        const was = bill.days.find((d) => d.day === day);
+        const { queued, result } = await submit({ kind: 'daily', date: `${bill.month}-${String(day).padStart(2, '0')}`,
+          row: { supplier_id: bill.supplier.id, weight, rate, note, base: { weight: was?.weight ?? null, rate: was?.rate ?? null } },
+          label: label(`day ${day}: ${weight != null ? `${weight} kg × ${rate}` : 'cleared'}`) });
+        bill = await api(`/bills/${id}`);
+        applyBill(); endSave(day, true, queued);
+        const c = result?.conflicts?.[0];
+        if (c?.what === 'kept_newer') toast(`Day ${day}: ${c.theirs?.by || 'someone'} changed it more recently, so their entry was kept. See Settings.`, 'error');
+        if (result?.skipped_closed?.length) toast('This month is closed, nothing was saved', 'error');
       } catch (ex: any) {
         dirty.add(day); endSave(day, false);
         toast(ex.message, 'error');
@@ -331,12 +350,18 @@ import App from '../layouts/App.astro';
     const del = el.closest<HTMLButtonElement>('[data-del-k]');
     if (del) {
       const day = Number(del.closest<HTMLElement>('tr[data-day]')!.dataset.day);
+      const [, j] = del.dataset.delK!.split(':').map(Number);
+      const k: any = bill.days.find((d) => d.day === day)?.kharcha[j];
+      if (!k) return;
       del.closest('.chip')?.classList.add('opacity-40');
       del.disabled = true;
       startSave(day);
       enqueue(async () => {
-        try { bill = await api(`/kharcha/${del.dataset.delK}`, { method: 'DELETE' }); applyBill(); endSave(day, true); }
-        catch (ex: any) { applyBill(); endSave(day, false); toast(ex.message, 'error'); }
+        try {
+          const { queued } = await submit({ kind: 'kharcha_del', id: k.id > 0 ? k.id : null, client_id: k.client_id ?? null,
+            label: label(`remove day ${day} kharcha ${k.amount}${k.tag || ''}`) });
+          bill = await api(`/bills/${id}`); applyBill(); endSave(day, true, queued);
+        } catch (ex: any) { applyBill(); endSave(day, false); toast(ex.message, 'error'); }
       });
       return;
     }
@@ -347,7 +372,10 @@ import App from '../layouts/App.astro';
     if (btn.id === 'print-adjust') adjustPrintPosition();
     if (btn.id === 'reopen') {
       const ok = await dialog('Reopen this bill?', '<p class="text-sm text-muted">The settlement is removed and next month\'s opening balance goes back to zero until you close it again.</p>', 'Reopen');
-      if (ok) await busy(btn, async () => { bill = await api(`/bills/${id}/reopen`, { method: 'POST' }); render(); toast('Bill reopened'); });
+      if (ok) await busy(btn, async () => {
+        try { const r = await change('POST', `/bills/${id}/reopen`, undefined, 'reopen'); render(); if (!r.queued) toast('Bill reopened'); }
+        catch (ex: any) { toast(ex.message, 'error'); }
+      });
     }
     if (btn.id === 'settings-btn') {
       const v = await dialog('Bill settings', `
@@ -356,8 +384,10 @@ import App from '../layouts/App.astro';
           <p class="text-xs text-muted mt-1">Positive: the supplier owed the shop (written as day-1 kharcha). Negative: the shop owed the supplier.</p></div>
         <div><label class="label">Note</label><textarea name="note" rows="3" class="input">${esc(bill.note ?? '')}</textarea></div>`);
       if (v) await busy(btn, async () => {
-        bill = await api(`/bills/${id}`, { method: 'PATCH', body: { commission_pct: Number(v.commission_pct), opening_due: Number(v.opening_due || 0), note: v.note || null } });
-        applyBill(); toast('Saved');
+        try {
+          const r = await change('PATCH', `/bills/${id}`, { commission_pct: Number(v.commission_pct), opening_due: Number(v.opening_due || 0), note: v.note || null }, 'bill settings');
+          applyBill(); if (!r.queued) toast('Saved');
+        } catch (ex: any) { toast(ex.message, 'error'); }
       });
     }
     if (btn.id === 'close') closeDialog(btn);
@@ -446,7 +476,14 @@ import App from '../layouts/App.astro';
       const left = f + cash; // still negative or zero
       body = { paid_cash: -cash, advance_cut: v.toadv ? left : 0, note: v.note || null };
     }
-    await busy(btn, async () => { bill = await api(`/bills/${id}/close`, { method: 'POST', body }); render(); toast('Month closed'); });
+    let closed = false;
+    await busy(btn, async () => {
+      try {
+        const r = await change('POST', `/bills/${id}/close`, body, `close month (paid ${body.paid_cash}, cut ${body.advance_cut})`);
+        closed = true; render(); if (!r.queued) toast('Month closed');
+      } catch (ex: any) { toast(ex.message, 'error'); }
+    });
+    if (!closed) return;
     // The cut paid the advance off: offer (never force) to close the khaata.
     if (bill.status === 'closed' && body.advance_cut > 0 && bill.advance_balance === 0 && can('manager')) {
       const [y, m] = bill.month.split('-').map(Number);
@@ -457,8 +494,8 @@ import App from '../layouts/App.astro';
         <div><label class="label">Reason (optional)</label><input name="reason" class="input" /></div>`, 'Close khaata');
       if (k) {
         try {
-          await api(`/suppliers/${bill.supplier.id}/khaata/close`, { method: 'POST', body: { on_date: monthEnd, reason: k.reason || null } });
-          toast('Khaata closed');
+          const r = await save('POST', `/suppliers/${bill.supplier.id}/khaata/close`, { on_date: monthEnd, reason: k.reason || null }, label('close khaata'));
+          if (!r.queued) toast('Khaata closed');
         } catch (ex: any) { toast(ex.message, 'error'); }
       }
     }

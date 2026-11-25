@@ -151,7 +151,7 @@ const nav = [
         const when = at.toDateString() === new Date().toDateString()
           ? at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
           : at.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-        banner.textContent = `No connection to the server · showing data saved on this device at ${when} · daily entries and kharcha are kept here and sent when it is back`;
+        banner.textContent = `No connection to the server · showing data saved on this device at ${when} · changes are kept on this device and sent when it is back`;
         banner.classList.remove('hidden');
         document.documentElement.classList.add('is-offline');
       });

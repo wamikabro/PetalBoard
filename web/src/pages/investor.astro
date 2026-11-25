@@ -7,6 +7,7 @@ import App from '../layouts/App.astro';
 
 <script>
   import { api, can } from '../lib/api';
+  import { save } from '../lib/outbox';
   import { makeChart, onTheme, series } from '../lib/charts';
   import { compact, esc, monthName, monthShort, num, rs, thisMonth, today } from '../lib/format';
   import { busy, dialog, download, qp, toast } from '../lib/ui';
@@ -134,7 +135,7 @@ import App from '../layouts/App.astro';
         <div><label class="label">Notes</label><textarea name="notes" class="input" rows="2">${esc(i.notes || '')}</textarea></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="active" value="1" ${i.active ? 'checked' : ''} /> Active</label>`);
       if (v) await busy(btn, async () => {
-        await api(`/investors/${id}`, { method: 'PATCH', body: { name: v.name, phone: v.phone || null, notes: v.notes || null, active: !!v.active } });
+        await save('PATCH', `/investors/${id}`, { name: v.name, phone: v.phone || null, notes: v.notes || null, active: !!v.active }, `Investor ${v.name}: details`);
         toast('Saved'); load();
       });
     }
@@ -149,8 +150,8 @@ import App from '../layouts/App.astro';
         <div><label class="label">Note</label><input name="note" class="input" /></div>
         <p class="text-xs text-muted">To change the % from a month on, end the old share the month before and add a new one.</p>`, 'Add share');
       if (v) await busy(btn, async () => {
-        await api('/khaata-shares', { method: 'POST', body: { supplier_id: Number(v.supplier_id), investor_id: id, pct: Number(v.pct),
-          from_month: v.from_month, to_month: v.to_month || null, note: v.note || null } });
+        await save('POST', '/khaata-shares', { supplier_id: Number(v.supplier_id), investor_id: id, pct: Number(v.pct),
+          from_month: v.from_month, to_month: v.to_month || null, note: v.note || null }, `Investor share ${v.pct}% from ${v.from_month}`);
         toast('Share added'); load();
       });
     }
@@ -164,13 +165,13 @@ import App from '../layouts/App.astro';
         </div>
         <div><label class="label">Note</label><input name="note" class="input" value="${esc(s.note || '')}" /></div>`);
       if (v) await busy(btn, async () => {
-        await api(`/khaata-shares/${s.id}`, { method: 'PATCH', body: { pct: Number(v.pct), from_month: v.from_month, to_month: v.to_month || null, note: v.note || null } });
+        await save('PATCH', `/khaata-shares/${s.id}`, { pct: Number(v.pct), from_month: v.from_month, to_month: v.to_month || null, note: v.note || null }, `Investor share: ${v.pct}%`);
         toast('Saved'); load();
       });
     }
     if (btn.dataset.delShare) {
       if (await dialog('Delete this share?', '<p class="text-sm text-muted">The earnings from this khaata disappear from the investor. Only for mistakes.</p>', 'Delete', true))
-        await busy(btn, async () => { await api(`/khaata-shares/${btn.dataset.delShare}`, { method: 'DELETE' }); toast('Deleted'); load(); });
+        await busy(btn, async () => { await save('DELETE', `/khaata-shares/${btn.dataset.delShare}`, undefined, 'Delete an investor share'); toast('Deleted'); load(); });
     }
     if (btn.id === 'money') {
       const v = await dialog('Money in / out', `
@@ -185,14 +186,14 @@ import App from '../layouts/App.astro';
         <div><label class="label">Khaata (optional)</label><select name="supplier_id" class="input">${supOptions(null, true)}</select></div>
         <div><label class="label">Note</label><input name="note" class="input" /></div>`);
       if (v) await busy(btn, async () => {
-        await api(`/investors/${id}/entries`, { method: 'POST', body: { kind: v.kind, amount: Number(v.amount), on_date: v.on_date,
-          supplier_id: v.supplier_id ? Number(v.supplier_id) : null, note: v.note || null } });
+        await save('POST', `/investors/${id}/entries`, { kind: v.kind, amount: Number(v.amount), on_date: v.on_date,
+          supplier_id: v.supplier_id ? Number(v.supplier_id) : null, note: v.note || null }, `Investor money: ${v.kind} ${v.amount}`);
         toast('Saved'); load();
       });
     }
     if (btn.dataset.delEntry) {
       if (await dialog('Delete this entry?', '<p class="text-sm text-muted">Only for mistakes.</p>', 'Delete', true))
-        await busy(btn, async () => { await api(`/investor-entries/${btn.dataset.delEntry}`, { method: 'DELETE' }); toast('Deleted'); load(); });
+        await busy(btn, async () => { await save('DELETE', `/investor-entries/${btn.dataset.delEntry}`, undefined, 'Delete an investor entry'); toast('Deleted'); load(); });
     }
   });
 

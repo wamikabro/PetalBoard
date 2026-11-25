@@ -7,6 +7,7 @@ import App from '../layouts/App.astro';
 
 <script>
   import { api, can } from '../lib/api';
+  import { save } from '../lib/outbox';
   import { makeChart, onTheme, series } from '../lib/charts';
   import { balanceWords, compact, esc, kg, monthName, monthShort, num, rs, rsSigned, today } from '../lib/format';
   import { busy, dialog, download, qp, toast } from '../lib/ui';
@@ -14,6 +15,7 @@ import App from '../layouts/App.astro';
   const id = Number(qp('id'));
   const page = document.getElementById('page')!;
   let d: any;
+  const who = () => d?.supplier?.name || 'Supplier';
   let flowers: any[] = [];
   let dayMonth = '';
   let themed = false;
@@ -155,8 +157,9 @@ import App from '../layouts/App.astro';
     if (!v) return;
     if (left && !v.write_off) return toast(`Tick "write off" to close with ${rs(left)} outstanding`, 'error');
     await busy(btn, async () => {
-      await api(`/suppliers/${id}/khaata/close`, { method: 'POST', body: { on_date: v.on_date, reason: v.reason || null, write_off: !!v.write_off } });
-      toast('Khaata closed'); load();
+      const r = await save('POST', `/suppliers/${id}/khaata/close`, { on_date: v.on_date, reason: v.reason || null, write_off: !!v.write_off }, `${who()}: close khaata`);
+      if (!r.queued) toast('Khaata closed');
+      load();
     });
   }
 
@@ -171,10 +174,11 @@ import App from '../layouts/App.astro';
       <div><label class="label">Terms (optional)</label><input name="terms" class="input" placeholder="e.g. 8% commission, advance 50,000" /></div>`, 'Renew');
     if (!v) return;
     await busy(btn, async () => {
-      await api(`/suppliers/${id}/khaata/renew`, { method: 'POST', body: {
+      const r = await save('POST', `/suppliers/${id}/khaata/renew`, {
         on_date: v.on_date, terms: v.terms || null, advance: Number(v.advance) || null,
-        commission_pct: v.commission_pct === '' ? null : Number(v.commission_pct) } });
-      toast('New khaata started'); load();
+        commission_pct: v.commission_pct === '' ? null : Number(v.commission_pct) }, `${who()}: renew khaata`);
+      if (!r.queued) toast('New khaata started');
+      load();
     });
   }
 
@@ -250,11 +254,11 @@ import App from '../layouts/App.astro';
     if (btn.id === 'k-renew') return renewKhaata(btn);
     if (btn.id === 'k-reopen') {
       if (!(await dialog('Undo closing the khaata?', '<p class="text-sm text-muted">Only for a closing done by mistake. The written-off amount comes back as outstanding and the investor shares are put back.</p>', 'Undo closing'))) return;
-      return busy(btn, async () => { await api(`/suppliers/${id}/khaata/reopen`, { method: 'POST' }); toast('Khaata open again'); load(); });
+      return busy(btn, async () => { const r = await save('POST', `/suppliers/${id}/khaata/reopen`, undefined, `${who()}: undo closing the khaata`); if (!r.queued) toast('Khaata open again'); load(); });
     }
     if (btn.dataset.delAdv) {
       if (!(await dialog('Delete this advance entry?', '<p class="text-sm text-muted">Only for mistakes. This cannot be undone.</p>', 'Delete', true))) return;
-      await busy(btn, async () => { await api(`/advances/${btn.dataset.delAdv}`, { method: 'DELETE' }); toast('Deleted'); load(); });
+      await busy(btn, async () => { await save('DELETE', `/advances/${btn.dataset.delAdv}`, undefined, `${who()}: delete an advance entry`); toast('Deleted'); load(); });
     }
     if (btn.id === 'adv') {
       const v = await dialog('Advance', `
@@ -265,8 +269,9 @@ import App from '../layouts/App.astro';
         </div>
         <div><label class="label">Note (optional)</label><input name="note" class="input" /></div>`);
       if (v) await busy(btn, async () => {
-        await api(`/suppliers/${id}/advances`, { method: 'POST', body: { kind: v.kind, amount: Number(v.amount), on_date: v.on_date, note: v.note || null } });
-        toast('Saved'); load();
+        const r = await save('POST', `/suppliers/${id}/advances`, { kind: v.kind, amount: Number(v.amount), on_date: v.on_date, note: v.note || null }, `${who()}: advance ${v.kind} ${v.amount}`);
+        if (!r.queued) toast('Saved');
+        load();
       });
     }
     if (btn.id === 'edit') {
@@ -286,10 +291,11 @@ import App from '../layouts/App.astro';
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="active" value="1" ${s.active ? 'checked' : ''} /> Active (shows on daily entry)</label>
         <p class="text-xs text-muted">Commission and flower changes apply to new bills. Change an existing bill from its Bill settings.</p>`);
       if (v) await busy(btn, async () => {
-        await api(`/suppliers/${id}`, { method: 'PATCH', body: {
+        const r = await save('PATCH', `/suppliers/${id}`, {
           name: v.name, name_ur: v.name_ur || null, flower_id: Number(v.flower_id), commission_pct: Number(v.commission_pct),
-          phone: v.phone || null, place: v.place || null, notes: v.notes || null, active: !!v.active } });
-        toast('Saved'); load();
+          phone: v.phone || null, place: v.place || null, notes: v.notes || null, active: !!v.active }, `${v.name}: details`);
+        if (!r.queued) toast('Saved');
+        load();
       });
     }
   });

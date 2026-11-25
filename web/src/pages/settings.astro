@@ -92,6 +92,7 @@ import App from '../layouts/App.astro';
 
 <script>
   import { api, API_URL, can, getToken, getUser } from '../lib/api';
+  import { save } from '../lib/outbox';
   import { esc } from '../lib/format';
   import { busy, dialog, download, toast } from '../lib/ui';
   import { deviceCopy, getState, outboxItems, problemDelete, problemsAll, syncNow, type SyncState } from '../lib/offline';
@@ -106,7 +107,7 @@ import App from '../layouts/App.astro';
     return `Not saved: ${esc(p.message || 'the server refused it')}`;
   }
   async function showOutbox() {
-    const waiting = await outboxItems(), problems = await problemsAll();
+    const waiting = (await outboxItems()).filter((w: any) => !w.sent), problems = await problemsAll();
     document.getElementById('outbox-status')!.innerHTML = waiting.length
       ? `<p class="text-warn font-medium">${waiting.length} change${waiting.length > 1 ? 's' : ''} waiting to be sent</p>
          <ul class="mt-1 text-muted list-disc pl-5">${waiting.slice(0, 20).map((w: any) => `<li>${esc(w.label || w.kind)}</li>`).join('')}</ul>`
@@ -187,7 +188,7 @@ import App from '../layouts/App.astro';
     e.preventDefault();
     const body: any = Object.fromEntries(new FormData(e.target as HTMLFormElement).entries());
     body.default_commission_pct = Number(body.default_commission_pct);
-    await busy((e.target as HTMLFormElement).querySelector('button'), async () => { await api('/settings', { method: 'PATCH', body }); toast('Saved'); });
+    await busy((e.target as HTMLFormElement).querySelector('button'), async () => { const r = await save('PATCH', '/settings', body, 'Shop details'); if (!r.queued) toast('Saved'); });
   });
 
   async function loadFlowers() {
@@ -201,12 +202,12 @@ import App from '../layouts/App.astro';
       <div><label class="label">Name</label><input name="name" class="input" value="${b.dataset.name}" /></div>
       <div><label class="label">Urdu name</label><input name="name_ur" class="input urdu" dir="rtl" value="${b.dataset.ur}" /></div>
       <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="active" value="1" ${b.dataset.active === 'true' ? 'checked' : ''} /> In use</label>`);
-    if (v) await busy(b, async () => { await api(`/flowers/${b.dataset.flower}`, { method: 'PATCH', body: { name: v.name, name_ur: v.name_ur || null, active: !!v.active } }); loadFlowers(); });
+    if (v) await busy(b, async () => { await save('PATCH', `/flowers/${b.dataset.flower}`, { name: v.name, name_ur: v.name_ur || null, active: !!v.active }, `Flower ${v.name}`); loadFlowers(); });
   });
   $('add-flower').addEventListener('click', async () => {
     const v = await dialog('New flower', `<div><label class="label">Name</label><input name="name" class="input" required /></div>
       <div><label class="label">Urdu name</label><input name="name_ur" class="input urdu" dir="rtl" /></div>`, 'Add');
-    if (v) try { await api('/flowers', { method: 'POST', body: { name: v.name, name_ur: v.name_ur || null } }); loadFlowers(); } catch (ex: any) { toast(ex.message, 'error'); }
+    if (v) try { await save('POST', '/flowers', { name: v.name, name_ur: v.name_ur || null }, `New flower ${v.name}`); loadFlowers(); } catch (ex: any) { toast(ex.message, 'error'); }
   });
 
   const ROLES = ['owner', 'manager', 'clerk', 'viewer'];

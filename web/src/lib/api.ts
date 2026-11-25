@@ -28,6 +28,21 @@ export function clearLogin() {
   try { store()?.removeItem(TOKEN_KEY); store()?.removeItem(USER_KEY); } catch { /* ignore */ }
 }
 
+// ---------- temporary ids (things made offline) and the real ids the server gave them ----------
+const IDMAP_KEY = 'petalboard_idmap';
+function idMap(): Record<string, number> {
+  try { return JSON.parse(store()?.getItem(IDMAP_KEY) || '{}'); } catch { return {}; }
+}
+export function rememberId(temp: number, real: number) {
+  try { const m = idMap(); m[String(temp)] = real; store()?.setItem(IDMAP_KEY, JSON.stringify(m)); } catch { /* ignore */ }
+}
+export function realId<T>(v: T): T | number {
+  const n = Number(v);
+  return Number.isInteger(n) && n < 0 ? idMap()[String(n)] ?? v : v;
+}
+export const realIds = (path: string) => path.replace(/\/(-\d+)(?=\/|$|[?])/g, (s, n) => `/${realId(Number(n))}`)
+  .replace(/([?&][a-z_]*id=)(-\d+)/g, (s, k, n) => `${k}${realId(Number(n))}`);
+
 const RANK: Record<Role, number> = { viewer: 0, clerk: 1, manager: 2, owner: 3 };
 export function can(role: Role): boolean {
   const u = getUser();
@@ -40,8 +55,11 @@ export class ApiError extends Error {
 
 export async function api<T = any>(
   path: string,
-  opts: { method?: string; body?: unknown; params?: Record<string, any> } = {},
+  opts: { method?: string; body?: unknown; params?: Record<string, any>; headers?: Record<string, string> } = {},
 ): Promise<T> {
+  // A page opened with the temporary id of something made offline: use the real id once the server gave one.
+  path = realIds(path);
+  if (opts.params) opts = { ...opts, params: Object.fromEntries(Object.entries(opts.params).map(([k, v]) => [k, /(^|_)id$/.test(k) ? realId(v) : v])) };
   let url = API_URL + path;
   if (opts.params) {
     const q = new URLSearchParams();
@@ -49,7 +67,7 @@ export async function api<T = any>(
     const s = q.toString();
     if (s) url += '?' + s;
   }
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...(opts.headers || {}) };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';

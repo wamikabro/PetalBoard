@@ -13,8 +13,8 @@
 //   - A reply from a different database (another db_id) is refused.
 //   - If a reply would make the copy much smaller (e.g. 300 bills here, 20 on the server), it is
 //     refused and a warning is shown. Someone must choose to accept it in Settings.
-import { API_URL, getToken } from './api';
-import { LOCAL_TABLES, LocalError, applyPending, localAnswer, type Tables } from './local';
+import { API_URL, getToken, getUser } from './api';
+import { LOCAL_TABLES, LocalError, applyPending, localAnswer, type Ctx, type PendingItem, type Tables } from './local';
 
 export const SYNC_TABLES = ['shop_settings', 'users', 'flowers', 'suppliers', 'investors', 'bills', 'bill_days', 'kharcha',
   'advances', 'khaata_shares', 'investor_entries', 'khaatas'] as const;
@@ -131,12 +131,24 @@ export async function deviceAnswer(url: string): Promise<{ data: any; at: number
   // Changes waiting to be sent must show, so with any of them the answer is always worked out here.
   if (!s.rev || !s.lastSync || (saved && saved.at >= s.lastSync && !pending.length)) return saved;
   try {
-    const data = localAnswer(keyOf(url), applyPending(await deviceTables(s.rev), pending));
+    const data = localAnswer(keyOf(url), applyPending(await deviceTables(s.rev), pending, saveCtx()));
     if (data !== undefined) return { data, at: s.lastSync };
   } catch (e) {
     if (e instanceof LocalError && !saved) throw e;
   }
   return saved;
+}
+
+/** Who is saving and when, for rows made on this device. */
+export const saveCtx = (): Ctx => ({ userId: getUser()?.id ?? null, now: new Date().toISOString() });
+
+/** The tables as this device sees them now: the copy plus every waiting save (and `extra`, if given).
+ *  With `extra`, a refusal of it is thrown (LocalError), so a save the server would refuse is not queued. */
+export async function deviceView(extra?: PendingItem): Promise<Tables | null> {
+  const s = await getState();
+  if (!s.rev) return null;  // no copy on this device yet: nothing to check against
+  const items = await outboxItems();
+  return applyPending(await deviceTables(s.rev), extra ? [...items, extra] : items, saveCtx(), !!extra);
 }
 
 // ---------- changes waiting to be sent (outbox) and changes the server did not take (problems) ----------
@@ -207,6 +219,7 @@ export function syncNow(opts: { force?: boolean; accept?: boolean } = {}): Promi
 }
 
 async function doSync({ force = false, accept = false }): Promise<SyncState> {
+  const startedAt = Date.now();
   const s = await getState();
   if (s.status === 'error' && s.warning?.includes('cannot save')) return s;
   const token = getToken();
@@ -290,6 +303,9 @@ async function doSync({ force = false, accept = false }): Promise<SyncState> {
     counts, status: 'ok', prefetchedRev: s.prefetchedRev,
   };
   await setState(next);
+  // Saves that reached the server before this update started are in the copy now: stop drawing them on top.
+  for (const it of await outboxItems()) if (it.sent && it.sent_at <= startedAt) await outboxDelete(it.seq);
+  window.dispatchEvent(new CustomEvent('petalboard:synced'));
   if (next.prefetchedRev !== d.rev) prefetch(next, full || !s.prefetchedRev, changedBills, changedSuppliers);
   return next;
 }

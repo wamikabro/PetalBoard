@@ -49,6 +49,7 @@ import App from '../layouts/App.astro';
 
 <script>
   import { api, can } from '../lib/api';
+  import { save } from '../lib/outbox';
   import { compact, esc, kg, monthName, num, rs, rsSigned, shiftMonth, thisMonth } from '../lib/format';
   import { busy, dialog, qp, setQuery, toast } from '../lib/ui';
 
@@ -168,8 +169,9 @@ import App from '../layouts/App.astro';
     $('start').addEventListener('click', async (e) => {
       const ok = await dialog(`Start ${monthName(month)}`, `<p class="text-sm text-muted">Creates an empty bill for every active supplier who does not have one this month. Last month's closed balances are carried in.</p>`, 'Create bills');
       if (ok) await busy(e.currentTarget as HTMLButtonElement, async () => {
-        const r = await api('/bills/start-month', { method: 'POST', body: { month } });
-        toast(`${r.created} bill(s) created`); load();
+        const r = await save('POST', '/bills/start-month', { month }, `Start ${monthName(month)}`);
+        if (!r.queued) toast(`${r.result.created} bill(s) created`);
+        load();
       });
     });
   }
@@ -183,8 +185,8 @@ import App from '../layouts/App.astro';
       const v = await dialog(`New bill for ${monthName(month)}`, `<div><label class="label">Supplier</label><select name="supplier_id" class="input">${options}</select></div>`, 'Create');
       if (!v) return;
       try {
-        const b = await api('/bills', { method: 'POST', body: { supplier_id: Number(v.supplier_id), month } });
-        location.href = `/bill?id=${b.id}&tab=edit`;
+        const r = await save('POST', '/bills', { supplier_id: Number(v.supplier_id), month }, `New bill, ${monthName(month)}`);
+        location.href = `/bill?id=${r.id}&tab=edit`;
       } catch (ex: any) { toast(ex.message, 'error'); }
     });
   }

@@ -25,6 +25,7 @@ import App from '../layouts/App.astro';
 
 <script>
   import { api, can } from '../lib/api';
+  import { save } from '../lib/outbox';
   import { makeChart, onTheme, series } from '../lib/charts';
   import { compact, esc, monthShort, rs } from '../lib/format';
   import { dialog, toast } from '../lib/ui';
@@ -84,8 +85,8 @@ import App from '../layouts/App.astro';
         <div><label class="label">Phone (optional)</label><input name="phone" class="input" inputmode="tel" /></div>`, 'Add');
       if (!v) return;
       try {
-        const i = await api('/investors', { method: 'POST', body: { name: v.name, phone: v.phone || null } });
-        location.href = `/investor?id=${i.id}`;
+        const r = await save('POST', '/investors', { name: v.name, phone: v.phone || null }, `New investor ${v.name}`);
+        location.href = `/investor?id=${r.id}`;
       } catch (e: any) { toast(e.message, 'error'); }
     });
   }

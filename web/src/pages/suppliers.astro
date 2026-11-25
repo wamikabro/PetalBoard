@@ -20,6 +20,7 @@ import App from '../layouts/App.astro';
 
 <script>
   import { api, can } from '../lib/api';
+  import { save } from '../lib/outbox';
   import { balanceWords, esc, kg, monthShort, rs, rsSigned } from '../lib/format';
   import { dialog, toast } from '../lib/ui';
 
@@ -82,11 +83,11 @@ import App from '../layouts/App.astro';
         </div>`, 'Add supplier');
       if (!v) return;
       try {
-        const s = await api('/suppliers', { method: 'POST', body: {
+        const r = await save('POST', '/suppliers', {
           name: v.name, name_ur: v.name_ur || null, flower_id: Number(v.flower_id) || null,
-          commission_pct: Number(v.commission_pct), phone: v.phone || null, place: v.place || null } });
-        toast(`${s.name} added`);
-        location.href = `/supplier?id=${s.id}`;
+          commission_pct: Number(v.commission_pct), phone: v.phone || null, place: v.place || null }, `New supplier ${v.name}`);
+        if (!r.queued) toast(`${v.name} added`);
+        location.href = `/supplier?id=${r.id}`;
       } catch (e: any) { toast(e.message, 'error'); }
     });
   }
