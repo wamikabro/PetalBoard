@@ -122,7 +122,7 @@ def entries(date_from: date, date_to: date, supplier_id: int | None = None, flow
             LEFT JOIN flowers f ON f.id = b.flower_id
             LEFT JOIN bill_days d ON d.bill_id = b.id AND d.day = x.day
             WHERE {" AND ".join(where)}
-            ORDER BY x.on_date, s.name
+            ORDER BY x.on_date, s.name, b.month, x.day
             """, args).fetchall()
     out = [{"date": r["on_date"].isoformat(), "bill_id": r["bill_id"], "supplier_id": r["supplier_id"],
             "supplier": r["supplier"], "flower": r["flower"], "weight": as_num(r["weight"]), "rate": as_num(r["rate"]),

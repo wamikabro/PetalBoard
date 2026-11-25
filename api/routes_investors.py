@@ -35,7 +35,7 @@ def earnings(conn, investor_id: int | None = None, supplier_id: int | None = Non
         args.append(supplier_id)
     shares = conn.execute(
         f"""SELECT ks.*, i.name AS investor_name FROM khaata_shares ks JOIN investors i ON i.id = ks.investor_id
-            WHERE {' AND '.join(where)}""", args).fetchall()
+            WHERE {' AND '.join(where)} ORDER BY ks.id""", args).fetchall()
     if not shares:
         return []
     sup_ids = list({s["supplier_id"] for s in shares})

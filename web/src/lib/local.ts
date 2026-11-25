@@ -10,7 +10,8 @@
 export type Tables = Record<string, any[]>;
 
 /** Tables needed for the answers below. */
-export const LOCAL_TABLES = ['shop_settings', 'flowers', 'suppliers', 'bills', 'bill_days', 'kharcha', 'advances'];
+export const LOCAL_TABLES = ['shop_settings', 'users', 'flowers', 'suppliers', 'bills', 'bill_days', 'kharcha', 'advances',
+  'khaatas', 'investors', 'khaata_shares', 'investor_entries'];
 
 export class LocalError extends Error {
   status: number;
@@ -365,10 +366,12 @@ function entries(d: Data, p: URLSearchParams) {
         flower: (b.flower_id != null && d.flowers.get(b.flower_id)?.name) || '',
         weight: x ? num(x.weight) : null, rate: x ? num(x.rate) : null, amount: x ? Number(x.amount) : 0,
         kharcha: sum(kh.filter((k) => k.day === day).map((k) => Number(k.amount))),
+        _month: b.month, _day: day,
       });
     }
   }
-  out.sort((a, b) => byName(a.date, b.date) || byName(a.supplier, b.supplier));
+  out.sort((a, b) => byName(a.date, b.date) || byName(a.supplier, b.supplier) || byName(a._month, b._month) || a._day - b._day);
+  for (const r of out) { delete r._month; delete r._day; }
   const w = sum(out.map((r) => Number(r.weight || 0)));
   const a = sum(out.map((r) => r.amount));
   return {
@@ -406,6 +409,239 @@ function balances(d: Data) {
 
 // ---------- routing ----------
 
+// ---------- settings, suppliers, investors (api/routes_suppliers.py, api/routes_investors.py) ----------
+
+const strip = ({ _key, ...row }: any) => row;
+const userName = (d: Data, id: any) => (id == null ? null : (d.t.users || []).find((u) => u.id === id)?.display_name ?? null);
+const FAR = '9999-12-01';
+
+function settings(d: Data) {
+  const s = (d.t.shop_settings || []).find((x) => x.id === 1) || (d.t.shop_settings || [])[0];
+  if (!s) throw new LocalError(404, 'No shop settings');
+  return { ...strip(s), default_commission_pct: num(s.default_commission_pct) };
+}
+
+/** Latest bill per supplier (bill summaries are newest month first). */
+function latestBills(d: Data): Map<number, any> {
+  const latest = new Map<number, any>();
+  for (const b of summaries(d, d.bills)) if (!latest.has(b.supplier_id)) latest.set(b.supplier_id, b);
+  return latest;
+}
+const balanceOf = (last: any) => (last == null ? 0 : last.status === 'closed' ? (last.carried || 0) : last.final);
+
+function supplierList(d: Data, includeInactive: boolean) {
+  const latest = latestBills(d);
+  const count = new Map<number, number>();
+  for (const b of d.bills) count.set(b.supplier_id, (count.get(b.supplier_id) || 0) + 1);
+  return [...d.suppliers.values()]
+    .filter((s) => includeInactive || s.active)
+    .sort((a, b) => Number(b.active) - Number(a.active) || byName(a.name, b.name))
+    .map((s) => {
+      const last = latest.get(s.id) ?? null;
+      return {
+        ...strip(s), flower_name: s.flower_id != null ? d.flowers.get(s.flower_id)?.name ?? null : null,
+        bill_count: count.get(s.id) || 0, commission_pct: num(s.commission_pct),
+        last_bill: last, balance: balanceOf(last), advance: advanceBalance(d, s.id),
+      };
+    });
+}
+
+function shareOf(commission: number, pct: any): number {
+  const p = BigInt(commission) * BigInt(scaled(pct, 2)); // ×10000
+  const q = p / 10000n;
+  return Number(p < 0n && q * 10000n !== p ? q - 1n : q);
+}
+
+/** One row per (investor, bill) inside a share period, like routes_investors.earnings. */
+function earnings(d: Data, investorId?: number, supplierId?: number) {
+  const investors = new Map((d.t.investors || []).map((i) => [i.id, i]));
+  const shares = (d.t.khaata_shares || [])
+    .filter((s) => (!investorId || s.investor_id === investorId) && (!supplierId || s.supplier_id === supplierId))
+    .sort((a, b) => a.id - b.id);
+  if (!shares.length) return [];
+  const sups = new Set(shares.map((s) => s.supplier_id));
+  const bills = summaries(d, d.bills.filter((b) => sups.has(b.supplier_id)));
+  const out: any[] = [];
+  for (const s of shares) {
+    const lo = s.from_month, hi = s.to_month || FAR;
+    for (const b of bills) {
+      const m = `${b.month}-01`;
+      if (b.supplier_id === s.supplier_id && lo <= m && m <= hi) {
+        out.push({
+          investor_id: s.investor_id, investor_name: investors.get(s.investor_id)?.name ?? null,
+          supplier_id: b.supplier_id, supplier_name: b.supplier_name, month: b.month,
+          bill_id: b.id, total: b.total, commission: b.commission,
+          pct: num(s.pct), earned: shareOf(b.commission, s.pct), status: b.status,
+        });
+      }
+    }
+  }
+  return out.sort((a, b) => byName(a.month, b.month) || byName(a.supplier_name, b.supplier_name));
+}
+
+function khaataInfo(d: Data, supplierId: number) {
+  const rows = (d.t.khaatas || []).filter((k) => k.supplier_id === supplierId)
+    .sort((a, b) => byName(a.opened_on, b.opened_on) || a.id - b.id);
+  let history = rows.map((r) => ({
+    id: r.id, opened_on: r.opened_on, terms: r.terms,
+    commission_pct: r.commission_pct != null ? num(r.commission_pct) : null,
+    closed_on: r.closed_on ?? null, close_reason: r.close_reason, written_off: r.written_off ?? null,
+    closed_by: userName(d, r.closed_by), opened_by: userName(d, r.created_by),
+  }));
+  if (!history.length) {
+    const dates = [
+      ...d.bills.filter((b) => b.supplier_id === supplierId).map((b) => b.month),
+      ...(d.t.advances || []).filter((a) => a.supplier_id === supplierId).map((a) => a.on_date),
+    ].sort();
+    history = [{ id: null, opened_on: dates[0] ?? null, terms: null, commission_pct: null, closed_on: null,
+      close_reason: null, written_off: null, closed_by: null, opened_by: null }];
+  }
+  const current = history[history.length - 1];
+  return { status: current.closed_on ? 'closed' : 'open', current, history, outstanding: advanceBalance(d, supplierId) };
+}
+
+function supplierPage(d: Data, id: number) {
+  const s = d.suppliers.get(id);
+  if (!s) throw new LocalError(404, 'Supplier not found');
+  const mine = d.bills.filter((b) => b.supplier_id === id);
+  const bills = summaries(d, mine);
+  const billMonth = new Map(d.bills.map((b) => [b.id, b.month]));
+  const days: any[] = [], kharcha: any[] = [];
+  for (const b of mine) {
+    for (const x of d.days.get(b.id) || []) if (x.weight != null) days.push({ date: dateOf(b.month, x.day), weight: num(x.weight), rate: num(x.rate), amount: Number(x.amount) });
+    for (const k of d.kharcha.get(b.id) || []) kharcha.push({ date: dateOf(b.month, k.day), amount: Number(k.amount), tag: k.tag, note: k.note, bill_id: b.id, _id: khOrder(k) });
+  }
+  days.sort((a, b) => byName(a.date, b.date));
+  kharcha.sort((a, b) => byName(b.date, a.date) || b._id - a._id);
+  // The market rate on the same days: every bill of this supplier's flower, in the months this supplier has bills.
+  const months = new Set(mine.map((b) => b.month));
+  const mk = new Map<string, { amount: number; weight: number }>();
+  for (const b of d.bills) {
+    if (!months.has(b.month) || (b.flower_id ?? null) !== (s.flower_id ?? null)) continue;
+    for (const x of d.days.get(b.id) || []) {
+      if (!(Number(x.weight) > 0)) continue;
+      const at = dateOf(b.month, x.day), cur = mk.get(at) || { amount: 0, weight: 0 };
+      cur.amount += Number(x.amount); cur.weight += Number(x.weight);
+      mk.set(at, cur);
+    }
+  }
+  const market = [...mk.keys()].sort().map((at) => {
+    const v = mk.get(at)!;
+    return { date: at, avg_rate: v.weight && v.amount ? round(v.amount / v.weight, 1) : null };
+  });
+  let running = 0;
+  const advances = (d.t.advances || []).filter((a) => a.supplier_id === id)
+    .sort((a, b) => byName(a.on_date, b.on_date) || a.id - b.id)
+    .map((a) => {
+      running += Number(a.amount);
+      const bm = a.bill_id != null ? billMonth.get(a.bill_id) : null;
+      return { id: a.id, on_date: a.on_date, amount: Number(a.amount), kind: a.kind, bill_id: a.bill_id ?? null, note: a.note,
+        bill_month: bm ? ym(bm) : null, by_name: userName(d, a.created_by), running };
+    });
+  const investors = new Map((d.t.investors || []).map((i) => [i.id, i]));
+  const shares = (d.t.khaata_shares || []).filter((x) => x.supplier_id === id)
+    .sort((a, b) => byName(a.from_month, b.from_month) || a.id - b.id)
+    .map((x) => ({ id: x.id, investor_id: x.investor_id, investor_name: investors.get(x.investor_id)?.name ?? null,
+      pct: num(x.pct), from_month: ym(x.from_month), to_month: x.to_month ? ym(x.to_month) : null, note: x.note }));
+  const last = bills[0] ?? null;
+  return {
+    supplier: { ...strip(s), flower_name: s.flower_id != null ? d.flowers.get(s.flower_id)?.name ?? null : null, commission_pct: num(s.commission_pct) },
+    position: { balance: balanceOf(last), advance: advanceBalance(d, id), last_bill: last },
+    bills,
+    days,
+    market,
+    kharcha: kharcha.map(({ _id, ...k }) => k),
+    advances,
+    khaata: khaataInfo(d, id),
+    shares,
+    investor_earnings: earnings(d, undefined, id),
+  };
+}
+
+function entryTotals(d: Data, investorId: number) {
+  const m = { invested: 0, withdrawn: 0, paid: 0 };
+  let any = false;
+  for (const e of d.t.investor_entries || []) {
+    if (e.investor_id !== investorId) continue;
+    any = true;
+    if (e.kind === 'invested') m.invested += Number(e.amount);
+    if (e.kind === 'withdrawn') m.withdrawn += Number(e.amount);
+    if (e.kind === 'payout') m.paid += Number(e.amount);
+  }
+  return any ? m : null;
+}
+
+function investorSummary(inv: any, rows: any[], money: any) {
+  const earned = sum(rows.map((r) => r.earned));
+  const m = money || { invested: 0, withdrawn: 0, paid: 0 };
+  return { ...strip(inv), earned, paid: m.paid, payable: earned - m.paid, invested: m.invested, withdrawn: m.withdrawn,
+    capital: m.invested - m.withdrawn, khaatas: new Set(rows.map((r) => r.supplier_id)).size };
+}
+
+function investorList(d: Data) {
+  const rows = earnings(d);
+  return [...(d.t.investors || [])]
+    .sort((a, b) => Number(b.active) - Number(a.active) || byName(a.name, b.name))
+    .map((inv) => {
+      const mine = rows.filter((r) => r.investor_id === inv.id);
+      const s: any = investorSummary(inv, mine, entryTotals(d, inv.id));
+      s.active_khaatas = (d.t.khaata_shares || []).filter((x) => x.investor_id === inv.id && x.to_month == null).length;
+      const months = new Map<string, number>();
+      for (const r of mine) months.set(r.month, (months.get(r.month) || 0) + r.earned);
+      s.by_month = [...months.keys()].sort().map((k) => ({ month: k, earned: months.get(k) }));
+      return s;
+    });
+}
+
+function investorPage(d: Data, id: number) {
+  const inv = (d.t.investors || []).find((i) => i.id === id);
+  if (!inv) throw new LocalError(404, 'Not found in investors');
+  const rows = earnings(d, id);
+  const sname = (sid: any) => (sid == null ? null : d.suppliers.get(sid)?.name ?? null);
+  const shares = (d.t.khaata_shares || []).filter((x) => x.investor_id === id)
+    .sort((a, b) => byName(sname(a.supplier_id) || '', sname(b.supplier_id) || '') || byName(a.from_month, b.from_month))
+    .map((x) => ({ ...strip(x), supplier_name: sname(x.supplier_id), pct: num(x.pct), from_month: ym(x.from_month), to_month: x.to_month ? ym(x.to_month) : null }));
+  const entries = (d.t.investor_entries || []).filter((e) => e.investor_id === id)
+    .sort((a, b) => byName(a.on_date, b.on_date) || a.id - b.id)
+    .map((e) => ({ ...strip(e), amount: Number(e.amount), supplier_name: sname(e.supplier_id) }));
+  const withShare = new Set((d.t.khaata_shares || []).filter((x) => x.investor_id === id).map((x) => x.supplier_id));
+  const khaatas = new Map<number, any>();
+  const k = (sid: number, name: string | null) => {
+    if (!khaatas.has(sid)) khaatas.set(sid, { supplier_id: sid, supplier_name: name, commission: 0, earned: 0, invested: 0, months: 0 });
+    return khaatas.get(sid);
+  };
+  for (const r of rows) { const x = k(r.supplier_id, r.supplier_name); x.commission += r.commission; x.earned += r.earned; x.months += 1; }
+  for (const e of entries) if (e.supplier_id) {
+    k(e.supplier_id, e.supplier_name).invested += e.kind === 'invested' ? e.amount : e.kind === 'withdrawn' ? -e.amount : 0;
+  }
+  for (const x of khaatas.values()) x.advance = withShare.has(x.supplier_id) ? advanceBalance(d, x.supplier_id) : 0;
+  const months = new Map<string, any>();
+  for (const r of rows) {
+    const m = months.get(r.month) || { month: r.month, commission: 0, earned: 0, khaatas: 0 };
+    m.commission += r.commission; m.earned += r.earned; m.khaatas += 1;
+    months.set(r.month, m);
+  }
+  const paid = new Map<string, number>();
+  for (const e of entries) if (e.kind === 'payout') paid.set(ym(e.on_date), (paid.get(ym(e.on_date)) || 0) + e.amount);
+  for (const key of paid.keys()) if (!months.has(key)) months.set(key, { month: key, commission: 0, earned: 0, khaatas: 0 });
+  let running = 0;
+  const monthRows = [...months.keys()].sort().map((key) => {
+    const m = months.get(key);
+    m.paid = paid.get(key) || 0;
+    running += m.earned - m.paid;
+    m.payable_after = running;
+    return m;
+  });
+  return {
+    investor: investorSummary(inv, rows, entryTotals(d, id)),
+    shares,
+    khaatas: [...khaatas.values()].sort((a, b) => b.earned - a.earned),
+    months: monthRows,
+    rows,
+    entries,
+  };
+}
+
 /** The answer to GET `path` (with its query string) from the tables, or undefined if it cannot be worked out here. */
 export function localAnswer(path: string, t: Tables): any {
   const [p, q = ''] = path.split('?');
@@ -418,13 +654,18 @@ export function localAnswer(path: string, t: Tables): any {
     const ms = month ? monthStart(month) : null;
     return summaries(d(), t.bills.filter((b) => (!ms || b.month === ms) && (!sid || b.supplier_id === sid)));
   }
-  if ((m = /^\/bills\/(\d+)$/.exec(p))) return loadBill(d(), Number(m[1]));
-  if ((m = /^\/bills\/(\d+)\/neighbours$/.exec(p))) return neighbours(d(), Number(m[1]));
+  if ((m = /^\/bills\/(-?\d+)$/.exec(p))) return loadBill(d(), Number(m[1]));
+  if ((m = /^\/bills\/(-?\d+)\/neighbours$/.exec(p))) return neighbours(d(), Number(m[1]));
   if ((m = /^\/daily\/([\d-]+)$/.exec(p))) return daily(d(), m[1]);
   if (p === '/reports/month') return monthReport(d(), params.get('month') || '');
   if (p === '/reports/entries') return entries(d(), params);
   if (p === '/reports/overview') return overview(d());
   if (p === '/reports/balances') return balances(d());
+  if (p === '/settings') return settings(d());
+  if (p === '/suppliers') return supplierList(d(), params.get('include_inactive') === 'true');
+  if ((m = /^\/suppliers\/(-?\d+)$/.exec(p))) return supplierPage(d(), Number(m[1]));
+  if (p === '/investors') return investorList(d());
+  if ((m = /^\/investors\/(-?\d+)$/.exec(p))) return investorPage(d(), Number(m[1]));
   if (p === '/flowers') return [...t.flowers].sort((a, b) => Number(b.active) - Number(a.active) || byName(a.name, b.name)).map(({ _key, ...row }: any) => row);
   return undefined;
 }

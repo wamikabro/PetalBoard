@@ -43,7 +43,10 @@ function diff(a, b, path, out, tol) {
 // avg_rate is a rounded float: allow one step of the last digit; everything else must match exactly.
 const tol = (p) => (/avg_rate$/.test(p) ? 0.1001 : /weight$/.test(p) ? 0.0005 : 0);
 
-const paths = ['/bills/months', '/bills', '/reports/overview', '/reports/balances', '/flowers'];
+const paths = ['/bills/months', '/bills', '/reports/overview', '/reports/balances', '/flowers', '/settings',
+  '/suppliers', '/suppliers?include_inactive=true', '/investors'];
+for (const s of tables.suppliers) paths.push(`/suppliers/${s.id}`);
+for (const i of tables.investors) paths.push(`/investors/${i.id}`);
 const months = (await get('/bills/months')).body;
 for (const m of months) {
   paths.push(`/bills?month=${m}`, `/reports/month?month=${m}`, `/reports/entries?date_from=${m}-01&date_to=${m}-28`);
