@@ -19,6 +19,20 @@ import App from '../layouts/App.astro';
       <p class="text-xs text-muted" id="backup-note"></p>
     </section>
 
+    <section class="card card-pad space-y-3" id="device-card">
+      <div>
+        <h2 class="font-semibold">Data on this device</h2>
+        <p class="text-sm text-muted">This phone or computer keeps its own copy of all the data and updates it every few minutes.
+          If the server is ever lost, the data is still here. A problem on the server never deletes this copy.</p>
+      </div>
+      <div id="device-status" class="text-sm">…</div>
+      <div id="device-warning" class="hidden rounded-lg bg-warn/10 text-sm p-3 space-y-2"></div>
+      <div class="flex flex-wrap gap-2">
+        <button class="btn-ghost" id="device-sync">Update now</button>
+        <button class="btn-ghost" id="device-copy">Download this device's copy (.json)</button>
+      </div>
+    </section>
+
     <section class="card card-pad">
       <div class="flex items-center justify-between gap-2">
         <div><h2 class="font-semibold">Shop details</h2><p class="text-sm text-muted">Bills are printed on the shop's own form (<code>web/public/bill/empty-bill.jpg</code>). To change the names or phone numbers on the bill, replace that image with a new blank form of the same size and layout.</p></div>
@@ -57,6 +71,45 @@ import App from '../layouts/App.astro';
   import { api, can, getUser } from '../lib/api';
   import { esc } from '../lib/format';
   import { busy, dialog, download, toast } from '../lib/ui';
+  import { deviceCopy, getState, syncNow, type SyncState } from '../lib/offline';
+
+  // ---- data on this device ----
+  function showDevice(st: SyncState) {
+    const when = (t?: number) => (t ? new Date(t).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'never');
+    const c = st.counts || {};
+    const label: Record<string, string> = { ok: 'Up to date', offline: 'Could not reach the server', blocked: 'Update stopped', error: 'Problem', never: 'Not saved yet' };
+    document.getElementById('device-status')!.innerHTML = `
+      <p><span class="chip ${st.status === 'ok' ? 'bg-good/10 text-good' : st.status === 'never' ? 'bg-sunken text-muted' : 'bg-warn/10 text-warn'}">${label[st.status] || st.status}</span>
+        <span class="text-muted ml-1">Last updated ${when(st.lastSync)}</span></p>
+      <p class="text-muted mt-1 tabular-nums">${(c.suppliers || 0).toLocaleString()} suppliers · ${(c.bills || 0).toLocaleString()} bills ·
+        ${(c.bill_days || 0).toLocaleString()} days · ${(c.kharcha || 0).toLocaleString()} kharcha · ${(c.advances || 0).toLocaleString()} advance entries</p>`;
+    const w = document.getElementById('device-warning')!;
+    w.classList.toggle('hidden', !st.warning);
+    if (st.warning) {
+      w.innerHTML = `<p class="text-warn font-medium">${esc(st.warning)}</p>
+        <p class="text-muted">Keep this device's copy until someone checks the server. Download it below to be safe.</p>
+        ${st.status === 'blocked' && can('owner') ? '<button class="btn-ghost !py-1.5 text-sm" id="device-accept">The server is right: replace this copy</button>' : ''}`;
+    }
+  }
+  getState().then(showDevice);
+  window.addEventListener('petalboard:sync', (e) => showDevice((e as CustomEvent).detail));
+  document.getElementById('device-card')!.addEventListener('click', async (e) => {
+    const b = (e.target as HTMLElement).closest('button');
+    if (!b) return;
+    if (b.id === 'device-sync') await busy(b, async () => { const st = await syncNow({ force: true }); toast(st.status === 'ok' ? 'Up to date' : 'Not updated: ' + (st.warning || 'no connection'), st.status === 'ok' ? 'ok' : 'error'); });
+    if (b.id === 'device-copy') {
+      const blob = await deviceCopy();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `petalboard-device-copy-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }
+    if (b.id === 'device-accept') {
+      const ok = await dialog('Replace the copy on this device?', '<p class="text-sm">The copy on this device will be replaced by what the server has now. Download the copy on this device first if you are not sure.</p>', 'Replace', true);
+      if (ok) await busy(b, async () => { const st = await syncNow({ accept: true }); toast(st.status === 'ok' ? 'Replaced' : 'Not updated', st.status === 'ok' ? 'ok' : 'error'); });
+    }
+  });
 
   const $ = (id: string) => document.getElementById(id)!;
   const FIELDS: [string, string, boolean][] = [

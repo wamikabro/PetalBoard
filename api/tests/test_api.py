@@ -268,12 +268,51 @@ def test_khaata_close_renew_reopen(client, flower):
     assert client.post(f"/suppliers/{sid}/khaata/renew", json={"on_date": "2026-10-02"}).status_code == 400  # still open
 
 
-def test_migration_from_version_1(client):
+def test_migration_from_version_1():
+    """An old (version 1) database with data in it is brought up to date without losing anything."""
+    import re
+    import psycopg
     import db
-    with db.transaction() as conn:
-        conn.execute("UPDATE schema_meta SET version = 1")
-        conn.execute("DROP TABLE khaatas")
-    db.migrate()
-    with db.transaction() as conn:
-        assert conn.execute("SELECT version FROM schema_meta").fetchone()["version"] == 2
-        assert conn.execute("SELECT to_regclass('public.khaatas') AS t").fetchone()["t"]
+    from conftest import ADMIN_URL
+    name = "petalboard_migrate_test"
+    url = ADMIN_URL.rsplit("/", 1)[0] + "/" + name
+    v1 = db.SCHEMA_FILE.read_text(encoding="utf-8").replace("VALUES (2)", "VALUES (1)").replace(", 'written_off'", "")
+    v1 = re.sub(r"CREATE TABLE khaatas \(.*?CREATE UNIQUE INDEX khaatas_one_open[^;]*;", "", v1, flags=re.S)
+    with psycopg.connect(ADMIN_URL, autocommit=True) as admin:
+        admin.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+        admin.execute(f"CREATE DATABASE {name}")
+    try:
+        with psycopg.connect(url, autocommit=True) as conn:
+            conn.execute(v1)
+            conn.execute("INSERT INTO flowers (name) VALUES ('Old flower')")
+        db.migrate(url)
+        db.migrate(url)  # safe to run again
+        with db.transaction(url=url) as conn:
+            assert conn.execute("SELECT version FROM schema_meta").fetchone()["version"] == max(db.MIGRATIONS)
+            assert conn.execute("SELECT to_regclass('public.khaatas') AS t").fetchone()["t"]
+            old = conn.execute("SELECT rev FROM flowers WHERE name = 'Old flower'").fetchone()
+            assert old and old["rev"] > 0
+    finally:
+        with psycopg.connect(ADMIN_URL, autocommit=True) as admin:
+            admin.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+
+
+def test_sync_sends_changes_and_deletions(client, flower):
+    full = client.get("/sync").json()
+    assert full["db_id"] and full["rev"] > 0 and full["counts"]["bills"] == len(full["tables"]["bills"])
+    assert all("password_hash" not in u for u in full["tables"]["users"])
+    rev = full["rev"]
+    sid = client.post("/suppliers", json={"name": "Sync Test", "flower_id": flower["id"]}).json()["id"]
+    bid = client.post("/bills", json={"supplier_id": sid, "month": "2025-02"}).json()["id"]
+    client.put(f"/bills/{bid}/days/3", json={"weight": 5, "rate": 100})
+    k = client.post(f"/bills/{bid}/kharcha", json={"day": 3, "amount": 70}).json()["days"][2]["kharcha"][0]["id"]
+    d = client.get("/sync", params={"since": rev}).json()
+    assert [r["name"] for r in d["tables"]["suppliers"]] == ["Sync Test"]
+    assert [r["_key"] for r in d["tables"]["bill_days"]] == [f"{bid}:3"]
+    assert d["rev"] > rev and not d["deletions"]
+    # Deleting is reported one by one, including rows removed by a cascade.
+    client.delete(f"/kharcha/{k}")
+    client.put(f"/bills/{bid}/days/3", json={"weight": None, "rate": None})
+    d2 = client.get("/sync", params={"since": d["rev"]}).json()
+    assert {(x["table"], x["key"]) for x in d2["deletions"]} == {("kharcha", str(k)), ("bill_days", f"{bid}:3")}
+    assert client.get("/sync", params={"since": d2["rev"]}).json()["tables"]["bills"] == []

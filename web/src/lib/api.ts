@@ -3,6 +3,8 @@
 const PRODUCTION_API = 'https://api.129.213.60.139.sslip.io';
 export const API_URL: string = (import.meta.env.PUBLIC_API_URL || PRODUCTION_API).replace(/\/$/, '');
 
+import { savedResponse, saveResponse } from './offline';
+
 const TOKEN_KEY = 'petalboard_token';
 const USER_KEY = 'petalboard_user';
 
@@ -52,6 +54,14 @@ export async function api<T = any>(
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   const method = opts.method || 'GET';
   const send = () => fetch(url, { method, headers, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
+  const keep = method === 'GET' && !path.startsWith('/sync') && !path.startsWith('/export') && !path.startsWith('/auth');
+  /** No server: show what was saved on this device the last time, if anything. */
+  const fromDevice = async (why: string) => {
+    const saved = keep ? await savedResponse(url) : null;
+    if (!saved) throw new ApiError(0, why);
+    window.dispatchEvent(new CustomEvent('petalboard:offline', { detail: { at: saved.at } }));
+    return saved.data as T;
+  };
   let res: Response;
   try {
     res = await send();
@@ -62,9 +72,11 @@ export async function api<T = any>(
       await new Promise((r) => setTimeout(r, 800));
       res = await send();
     } catch {
-      throw new ApiError(0, 'Cannot reach the server. Check the internet connection.');
+      return fromDevice('Cannot reach the server. Check the internet connection.');
     }
   }
+  // The server is there but its app is down (proxy error): same as no server, for reading.
+  if (method === 'GET' && [502, 503, 504].includes(res.status)) return fromDevice(`The server is not answering (${res.status}).`);
   if (res.status === 401 && !path.startsWith('/auth/login')) {
     clearLogin();
     location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
@@ -76,5 +88,7 @@ export async function api<T = any>(
     const msg = typeof d === 'string' ? d : Array.isArray(d) ? d.map((x: any) => x.msg).join(', ') : `Error ${res.status}`;
     throw new ApiError(res.status, msg);
   }
+  if (keep) saveResponse(url, data);
+  window.dispatchEvent(new CustomEvent('petalboard:online'));
   return data as T;
 }

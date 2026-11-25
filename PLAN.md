@@ -104,13 +104,34 @@ A server error must never overwrite the real data. So:
   after every `npm run build` (precaches all 37 files; pages network-first with a 4 s timeout, then the saved
   copy). Checked in headless Chrome: every page opens offline. Pages still need the server for data (4b).
 
-### 4b. Whole data kept on the phone
+### 4b. Whole data kept on the phone (read-only part done 2026-11-25)
 - New API `GET /sync?since=<cursor>`: everything changed since the last sync (all tables the app reads),
   using `updated_at` columns (add where missing) plus a deletions log.
 - The phone stores it in IndexedDB. Pages read from there first, then refresh from the server when online.
 - Bill totals must be worked out on the phone too: port the arithmetic in `api/billing.py`
   (amount, commission, net, final, warnings) to TypeScript, with tests that compare both on every
   imported bill.
+
+Done (2026-11-25):
+- Server: migration v3 gives every row a change number (`rev`, one sequence `change_seq`) and logs deletes in
+  `deletions` (triggers); `schema_meta.db_id` identifies the database. `GET /sync?since=` (`api/routes_sync.py`)
+  returns changed rows, deletions, counts and db_id in one consistent snapshot. Test: `test_sync_sends_changes_and_deletions`.
+- Phone: `web/src/lib/offline.ts` keeps every table in IndexedDB (`petalboard-offline`), syncs 1.5 s after a page
+  opens, every 5 min and when the connection returns; asks again for the last 500 changes each time (overlap) and
+  does a full check once a day. Safety rules are at the top of that file. Then it saves the data of the pages
+  people use (lists, last two months' bills, every supplier and investor) so they open offline.
+- `api()` saves every GET answer and, with no server (network error or 502/503/504), returns the saved one and
+  shows a yellow notice at the top. Settings → "Data on this device": status, counts, Update now, download the
+  device's copy (.json, same tables as the backup's `_restore/`), and (owner) accept a refused reply.
+- Checked in headless Chrome on the dev data: full copy 164 bills / 4,349 days; 203 pages saved in ~40 s;
+  offline bills list and bill open with the notice; add and delete of a kharcha reach the device; a 500, a
+  strange reply, an empty database and another db_id each change nothing (the last two show "Update stopped").
+
+Still to do in 4b:
+- Pages that were never saved (e.g. other months, Reports with any date range) show an error offline. Next: work
+  those out from the table copy on the phone (port the bill arithmetic from `api/billing.py` to TypeScript, with
+  a test comparing both on every imported bill).
+- Restore the server from a device copy (an owner-only upload that loads the .json).
 
 ### 4c. Changes made offline upload later
 - Every change goes to an "outbox" in IndexedDB first, shown at once on screen, then sent in order.

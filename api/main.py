@@ -14,6 +14,7 @@ import routes_export
 import routes_investors
 import routes_reports
 import routes_suppliers
+import routes_sync
 
 
 @asynccontextmanager
@@ -32,7 +33,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for module in (routes_auth, routes_suppliers, routes_bills, routes_reports, routes_investors, routes_export):
+for module in (routes_auth, routes_suppliers, routes_bills, routes_reports, routes_investors, routes_export,
+               routes_sync):
     app.include_router(module.router)
 
 

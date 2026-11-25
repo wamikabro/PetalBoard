@@ -111,9 +111,32 @@ const nav = [
         </nav>
       </div>
     )}
+    <style is:global>
+      /* Room for the offline notice at the top. */
+      html.is-offline body { padding-top: 1.5rem; }
+      html.is-offline header.sticky { top: 1.5rem; }
+    </style>
+    <div id="offline-banner" role="status" class="hidden no-print fixed top-0 inset-x-0 z-[55] bg-warn text-white text-xs font-medium text-center py-1 px-3"></div>
     <div id="toasts" class="no-print fixed z-[60] bottom-24 lg:bottom-6 right-4 left-4 sm:left-auto flex flex-col items-end gap-2 pointer-events-none" aria-live="polite"></div>
     <script>
-      import { api, clearLogin, getUser } from '../lib/api';
+      import { api, clearLogin, getUser, getToken } from '../lib/api';
+      import { startSync } from '../lib/offline';
+      // Keep a copy of all data on this device (safe if the server is lost; pages work offline).
+      if (getToken()) startSync();
+      const banner = document.getElementById('offline-banner')!;
+      window.addEventListener('petalboard:offline', (e: Event) => {
+        const at = new Date((e as CustomEvent).detail.at);
+        const when = at.toDateString() === new Date().toDateString()
+          ? at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+          : at.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+        banner.textContent = `No connection to the server · showing data saved on this device at ${when} · changes cannot be saved yet`;
+        banner.classList.remove('hidden');
+        document.documentElement.classList.add('is-offline');
+      });
+      window.addEventListener('petalboard:online', () => {
+        banner.classList.add('hidden');
+        document.documentElement.classList.remove('is-offline');
+      });
       // Keep the app on the device so it opens without internet (production builds only).
       if (import.meta.env.PROD && 'serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js').catch(() => {});
