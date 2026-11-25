@@ -153,6 +153,30 @@ def test_outbox_replays_are_safe_and_later_change_wins(client, flower):
     assert [k["client_id"] for k in day()["kharcha"]] == ["k-1"]
 
 
+def test_a_save_sent_twice_is_applied_once(client, flower):
+    """X-Change-Id: the device's id for a save. Sent again after a lost answer: same answer, nothing new."""
+    h = {"X-Change-Id": "chg-supplier-1"}
+    first = client.post("/suppliers", json={"name": "Twice Test", "flower_id": flower["id"]}, headers=h)
+    again = client.post("/suppliers", json={"name": "Twice Test", "flower_id": flower["id"]}, headers=h)
+    assert first.status_code == again.status_code == 200
+    assert again.json()["id"] == first.json()["id"] and again.headers.get("X-Change-Replayed") == "1"
+    sid = first.json()["id"]
+    for _ in range(2):
+        r = client.post(f"/suppliers/{sid}/advances", json={"on_date": "2026-11-02", "amount": 5000, "kind": "given"},
+                        headers={"X-Change-Id": "chg-adv-1"})
+        assert r.status_code == 200
+    assert client.get(f"/suppliers/{sid}").json()["position"]["advance"] == 5000
+    # A refused save is not remembered: once fixed on the server side, the same id can still go through.
+    bad = client.post(f"/suppliers/{sid}/advances", json={"on_date": "2026-11-02", "amount": -1, "kind": "given"},
+                      headers={"X-Change-Id": "chg-adv-2"})
+    assert bad.status_code == 422
+    r = client.post("/suppliers", json={"name": "Twice Test"}, headers={"X-Change-Id": "chg-supplier-2"})
+    assert r.status_code == 400  # name taken: refused, not recorded
+    assert client.post("/suppliers", json={"name": "Twice Test 2"}, headers={"X-Change-Id": "chg-supplier-2"}).status_code == 200
+    # Without an id, saves behave as before.
+    assert client.post("/suppliers", json={"name": "Twice Test 3"}).status_code == 200
+
+
 def test_reports(client):
     rep = client.get("/reports/month", params={"month": "2026-11"}).json()
     assert rep["kpis"]["total"] > 0

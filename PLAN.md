@@ -186,3 +186,24 @@ Done for the daily entry page (2026-11-25):
 
 ## Earlier backlog
 See the "Next steps" in `CLAUDE.md` (owner questions, August 2026, closing months in order, deployment items).
+
+## 5. Almost everything works offline (asked 2026-11-25)
+
+Owner: "make almost everything work offline". Builds on 4c (daily entry already works offline).
+
+- [ ] 5a. Server: every save may carry `X-Change-Id` (made on the device). The first time it is applied in the
+      same database transaction as the change and remembered with its answer; sent again, the same answer comes
+      back and nothing is applied twice. Works for every POST/PUT/PATCH/DELETE. Tests.
+- [ ] 5b. Phone reads: `/settings`, `/suppliers`, `/suppliers/{id}`, `/investors`, `/investors/{id}` worked out in
+      `local.ts` (today they come from saved pages). `check-local.mjs` covers them (0 differ).
+- [ ] 5c. Phone saves: one outbox for every save. `local.ts` applies each waiting save the way the server will
+      (bill days, kharcha, bill settings, close/reopen month with advance cut and next month's opening, start month,
+      new bill, suppliers, advances, khaata close/renew/reopen, investors, shares, investor entries, flowers, shop
+      details). Things made offline (supplier, investor, bill, share...) get a temporary negative id; when the server
+      answers with the real id, later waiting saves and open pages switch to it.
+- [ ] 5d. Pages use it: bill, bills, supplier(s), investor(s), settings (shop, flowers), daily "New supplier".
+      A save the server refuses later (e.g. the month was closed on another phone) goes to "Sync problems".
+- [ ] 5e. Check: a script makes each kind of save both on the device copy and on a test server and compares
+      every affected answer; headless Chrome run with the API stopped; deploy.
+
+Stays online only: log in / out, users, restore, backup and Excel downloads (made by the server).

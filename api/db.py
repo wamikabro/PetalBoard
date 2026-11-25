@@ -1,6 +1,7 @@
 """Database connections and the one-time schema setup."""
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 import psycopg
@@ -9,6 +10,10 @@ from psycopg.rows import dict_row
 import config
 
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
+
+# The save being handled, when the device gave it an id (X-Change-Id, see main.py). The first write
+# transaction of the request records the id, so the change and "this id was applied" commit together.
+CHANGE: ContextVar[dict | None] = ContextVar("change", default=None)
 
 
 def connect(url: str | None = None) -> psycopg.Connection:
@@ -22,6 +27,11 @@ def transaction(user_id: int | None = None, url: str | None = None):
         with conn.transaction():
             if user_id is not None:
                 conn.execute("SELECT set_config('app.user_id', %s, true)", (str(user_id),))
+                change = CHANGE.get()
+                if change and not change["recorded"]:
+                    conn.execute("INSERT INTO applied_changes (id, user_id, method, path) VALUES (%s, %s, %s, %s)",
+                                 (change["id"], user_id, change["method"], change["path"]))
+                    change["recorded"] = True
             yield conn
 
 
@@ -102,4 +112,18 @@ MIGRATIONS[4] = """
     -- When the change to a day was made (on a phone it can be hours before it reaches the server).
     -- Two changes to one day: the one made later wins.
     ALTER TABLE bill_days ADD COLUMN made_at timestamptz;
+"""
+
+# Saves sent from a device carry their own id; a save sent twice (the answer was lost) is applied once.
+MIGRATIONS[5] = """
+    CREATE TABLE applied_changes (
+        id       text PRIMARY KEY,
+        user_id  int,
+        method   text NOT NULL,
+        path     text NOT NULL,
+        status   int,
+        response jsonb,
+        at       timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX applied_changes_at ON applied_changes(at);
 """
