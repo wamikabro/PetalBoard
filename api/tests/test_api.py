@@ -333,3 +333,41 @@ def test_row_on_a_day_the_month_lacks(client, flower):
     r = client.get("/reports/month", params={"month": "2026-06"})
     assert r.status_code == 200, r.text
     assert len(r.json()["daily"]) == 30
+
+
+def test_restore_from_a_device_copy(client):
+    """A phone's copy (the /sync tables) fills a new, empty server; a server with data refuses it."""
+    import json
+    import psycopg
+    import db
+    from billing import load_bill
+    from conftest import ADMIN_URL
+    from routes_restore import read_copy, restore_tables
+
+    copy = {t: rows for t, rows in client.get("/sync").json()["tables"].items()}
+    body = json.dumps(copy).encode()
+    assert client.post("/restore", content=body).status_code == 409   # this server has data
+    assert client.post("/restore", content=b"nonsense").status_code == 400
+
+    name = "petalboard_restore_test"
+    url = ADMIN_URL.rsplit("/", 1)[0] + "/" + name
+    with psycopg.connect(ADMIN_URL, autocommit=True) as admin:
+        admin.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+        admin.execute(f"CREATE DATABASE {name}")
+    try:
+        db.migrate(url)
+        with db.transaction(url=url) as conn:
+            counts = restore_tables(conn, read_copy(body))
+        assert counts["bills"] == len(copy["bills"]) > 0
+        with db.transaction() as old, db.transaction(url=url) as new:
+            for t in ("suppliers", "bills", "bill_days", "kharcha", "advances"):
+                assert new.execute(f"SELECT count(*) AS n FROM {t}").fetchone()["n"] == \
+                       old.execute(f"SELECT count(*) AS n FROM {t}").fetchone()["n"], t
+            for b in copy["bills"]:
+                assert load_bill(new, b["id"])["totals"] == load_bill(old, b["id"])["totals"]
+            # New rows get fresh ids after the restored ones.
+            f = new.execute("INSERT INTO flowers (name) VALUES ('After restore') RETURNING id").fetchone()
+            assert f["id"] > max(r["id"] for r in copy["flowers"])
+    finally:
+        with psycopg.connect(ADMIN_URL, autocommit=True) as admin:
+            admin.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")

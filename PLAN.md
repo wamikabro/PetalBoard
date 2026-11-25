@@ -138,8 +138,15 @@ Done (2026-11-25, second part):
   Fixed; the bill now warns about it; noted in Q24. Checked in headless Chrome with the API stopped: March bills,
   a March bill, Reports Feb–Mar, daily 10 March and the February dashboard all open from the device.
 
+Restore (server side done 2026-11-25): `POST /restore` (owner, `api/routes_restore.py`) loads a device copy (.json)
+or a backup zip (`_restore/`) into a **new, empty** server only (409 if it has any supplier or bill). Users are not
+restored (no passwords in copies): create the owner login on the new server first; "entered by" links to unknown
+users become empty. Test `test_restore_from_a_device_copy`; the full dev data (164 bills) restored into a fresh
+database gave identical bills.
+
 Still to do in 4b:
-- Restore the server from a device copy (an owner-only upload that loads the .json).
+- Settings button for restore (owner): pick the file, show the counts, upload as the request body. Until then:
+  `curl -X POST -H "Authorization: Bearer <token>" --data-binary @copy.json <api>/restore`.
 
 ### 4c. Changes made offline upload later
 - Every change goes to an "outbox" in IndexedDB first, shown at once on screen, then sent in order.

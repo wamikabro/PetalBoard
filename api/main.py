@@ -14,6 +14,7 @@ import routes_export
 import routes_investors
 import routes_reports
 import routes_suppliers
+import routes_restore
 import routes_sync
 
 
@@ -34,7 +35,7 @@ app.add_middleware(
 )
 
 for module in (routes_auth, routes_suppliers, routes_bills, routes_reports, routes_investors, routes_export,
-               routes_sync):
+               routes_sync, routes_restore):
     app.include_router(module.router)
 
 
