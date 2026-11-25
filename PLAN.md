@@ -45,7 +45,7 @@ cannot make it yet; the Excel month files have the same numbers). Takes about 20
 Today: the bill shows "Advance outstanding" (`advances` table, running sum). Closing a month has a free
 "Cut from the advance" number with no limit check. Cuts are stored as `advances` rows of kind `bill_cut`.
 
-### 2a. Cut from the outstanding when settling a bill
+### 3a. Cut from the outstanding when settling a bill
 - In the Close-month dialog, the cut box gets three buttons: **50%**, **Full**, **Custom**.
 - Limit = the smaller of the outstanding advance and the money the shop owes on this bill (positive final).
   50% and Full are of that limit, rounded down to whole rupees.
@@ -56,12 +56,12 @@ Today: the bill shows "Advance outstanding" (`advances` table, running sum). Clo
   get around the screen check. Add tests.
 - Never cut on its own: the editor always chooses (default 0, as now).
 
-### 2b. History of the outstanding
+### 3b. History of the outstanding
 - Supplier page and bill page: "Outstanding history" table: date, what happened (given / cut from bill
   "Oct 2026" with link / cash returned / written off / opening), amount, balance after, who entered it.
 - Comes from the `advances` rows; add `created_by` names to `GET /suppliers/{id}` history output.
 
-### 2c. Khaata close and renew
+### 3c. Khaata close and renew
 - New table `khaatas`: supplier, opened on, closed on, terms (commission %, note), closed reason, closed by.
   Every existing supplier gets one open khaata starting at their first bill (migration).
 - **Close khaata** (manager/owner, button on the supplier page): asks for a reason and shows the outstanding.
@@ -93,15 +93,18 @@ A server error must never overwrite the real data. So:
 - The phone can export its own copy as the readable backup zip (section 2) with no server at all, and the
   server can be refilled from a phone copy (restore).
 
-### 3a. App works without internet (installable)
+### 4a. App works without internet (installable) (done 2026-11-25)
 - Web app manifest + icons, so it can be added to the home screen (iPhone: Safari > Share > Add to Home
   Screen; Android: Chrome install prompt).
 - Service worker caches every page, script, font and the blank form image. Pages with `?id=` are served
   from the same cached page.
 - Ask the browser to keep the data (`navigator.storage.persist()`); on iPhone this only holds for the
   home-screen app, so the install step matters there.
+- Done: `public/manifest.webmanifest`, icons in `public/icons/`, `scripts/build-sw.mjs` writes `dist/sw.js`
+  after every `npm run build` (precaches all 37 files; pages network-first with a 4 s timeout, then the saved
+  copy). Checked in headless Chrome: every page opens offline. Pages still need the server for data (4b).
 
-### 3b. Whole data kept on the phone
+### 4b. Whole data kept on the phone
 - New API `GET /sync?since=<cursor>`: everything changed since the last sync (all tables the app reads),
   using `updated_at` columns (add where missing) plus a deletions log.
 - The phone stores it in IndexedDB. Pages read from there first, then refresh from the server when online.
@@ -109,7 +112,7 @@ A server error must never overwrite the real data. So:
   (amount, commission, net, final, warnings) to TypeScript, with tests that compare both on every
   imported bill.
 
-### 3c. Changes made offline upload later
+### 4c. Changes made offline upload later
 - Every change goes to an "outbox" in IndexedDB first, shown at once on screen, then sent in order.
 - Sent when the connection returns (`online` event, app opening, Background Sync on Android; iPhone has no
   background sync, so it sends when the app is opened).
@@ -121,7 +124,7 @@ A server error must never overwrite the real data. So:
 - Closing months, khaata close and advances stay online-only at first (money decisions, need fresh balances).
 
 ### Order
-3a → 3b read-only → offline daily entry and kharcha → offline bill editing → the rest.
+4a → 4b read-only → offline daily entry and kharcha → offline bill editing → the rest.
 
 ## Earlier backlog
 See the "Next steps" in `CLAUDE.md` (owner questions, August 2026, closing months in order, deployment items).

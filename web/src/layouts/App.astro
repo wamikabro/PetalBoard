@@ -29,6 +29,13 @@ const nav = [
     <meta name="robots" content="noindex" />
     <title>{title} · PetalBoard</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/icon-180-square.png" />
+    <meta name="theme-color" content="#9d2668" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="PetalBoard" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Kalam:wght@400&family=Noto+Nastaliq+Urdu:wght@400;700&display=swap" rel="stylesheet" />
@@ -107,6 +114,12 @@ const nav = [
     <div id="toasts" class="no-print fixed z-[60] bottom-24 lg:bottom-6 right-4 left-4 sm:left-auto flex flex-col items-end gap-2 pointer-events-none" aria-live="polite"></div>
     <script>
       import { api, clearLogin, getUser } from '../lib/api';
+      // Keep the app on the device so it opens without internet (production builds only).
+      if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+        // Ask the browser not to clear saved data when space runs low (needed on iPhone).
+        navigator.storage?.persist?.().catch(() => {});
+      }
       const u = getUser();
       document.querySelectorAll('[data-user-name]').forEach((e) => (e.textContent = u?.display_name || ''));
       document.querySelectorAll('[data-user-role]').forEach((e) => (e.textContent = u?.role || ''));
