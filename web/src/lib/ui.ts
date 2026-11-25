@@ -73,7 +73,8 @@ export async function busy<T>(btn: HTMLButtonElement | null, fn: () => Promise<T
 /** Download a file from the API (sends the login token), e.g. download('/export/backup'). */
 export async function download(path: string, btn?: HTMLButtonElement | null) {
   const { API_URL, getToken } = await import('./api');
-  if (btn) btn.disabled = true;
+  const label = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
   try {
     const res = await fetch(API_URL + path, { headers: { Authorization: `Bearer ${getToken()}` } });
     if (!res.ok) {
@@ -90,6 +91,6 @@ export async function download(path: string, btn?: HTMLButtonElement | null) {
   } catch (e: any) {
     toast(e?.message || 'Download failed', 'error');
   } finally {
-    if (btn) btn.disabled = false;
+    if (btn) { btn.disabled = false; btn.innerHTML = label!; }
   }
 }

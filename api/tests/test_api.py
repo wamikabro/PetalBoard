@@ -166,8 +166,18 @@ def test_exports(client):
     assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
     import io, zipfile
     z = zipfile.ZipFile(io.BytesIO(r.content))
-    assert "json/bills.json" in z.namelist() and "README.txt" in z.namelist()
-    assert "password_hash" not in z.read("json/users.json").decode()
+    names = z.namelist()
+    top = names[0].split("/")[0]
+    assert top.startswith("PetalBoard backup ")
+    for f in ("README.txt", "Summary.xlsx", "Daily entries.csv", "_restore/bills.json", "_restore/manifest.json"):
+        assert f"{top}/{f}" in names, f
+    assert any(n.startswith(f"{top}/Bills/") and n.endswith(".xlsx") for n in names)
+    assert any(n.startswith(f"{top}/Suppliers/") for n in names) and any(n.startswith(f"{top}/Investors/") for n in names)
+    assert "password_hash" not in z.read(f"{top}/_restore/users.json").decode()
+    # Readable files use names, not ids.
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(z.read(f"{top}/Summary.xlsx")))
+    assert wb["Suppliers"]["A1"].value == "Supplier" and "supplier_id" not in z.read(f"{top}/Daily entries.csv").decode("utf-8-sig")
     sid = client.get("/suppliers").json()[0]["id"]
     assert client.get(f"/export/supplier/{sid}.xlsx").status_code == 200
     iid = client.get("/investors").json()[0]["id"]

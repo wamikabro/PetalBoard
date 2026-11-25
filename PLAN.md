@@ -1,8 +1,8 @@
 # PetalBoard work plan (from 2026-11-25)
 
-Work through these one at a time. Tick each step when it is done and deployed.
+Work through these one at a time, smallest first. Tick each step when it is done and deployed.
 
-## 1. Autosave everything, smoothly (in progress 2026-11-25)
+## 1. Autosave everything, smoothly (done 2026-11-25)
 
 Problem: on the bill page, adding a kharcha redrew the whole grid from the server, so weight/rate typed on other
 days (not saved yet) went back to the old values. The daily page redrew all rows after a kharcha, losing other
@@ -13,9 +13,34 @@ typed kharcha boxes and the cursor.
       Tag is typed after the amount: `1250B`.
 - [x] Daily page: a save only refreshes its own row; typing during a slow save is not marked "saved".
       A kharcha on a row whose weight has no rate yet keeps the saved weight/rate and only adds the kharcha.
-- [ ] Click through both pages in a browser (desktop + phone), then push.
+- [x] Checked in headless Chrome: typed-but-unsaved days survive kharcha saves, cursor stays, tab switch keeps typing. Pushed.
 
-## 2. Outstanding (advance) control and khaata open/close
+## 2. Backup that a person can read (done 2026-11-25)
+
+Today `/export/backup` is a zip of raw database tables (`json/` and `csv/`, one file per table, with ids and
+foreign keys such as `supplier_id = 17`). It can be restored, but nobody can read it.
+
+New zip layout (Settings → Download backup):
+- `PetalBoard backup 2026-11-25/`
+  - `README.txt`: what each file is, in plain words (English + Urdu).
+  - `Summary.xlsx`: suppliers (name, Urdu name, flower, khaata open/closed, outstanding, last bill),
+    who owes whom right now, month-by-month totals, investors and their earnings.
+  - `Bills/2026-10 October.xlsx`: one workbook per month, one sheet per supplier laid out like the paper bill
+    (day, weight, rate, amount, kharcha, then commission, net, kharcha, final, paid, carried), plus a
+    first sheet listing every bill of the month with totals.
+  - `Bills/2026-10 October.pdf`: the printed bills (same as Print all), optional because it makes the zip larger.
+  - `Suppliers/<name>.xlsx`: each supplier's full history and outstanding history (reuses `/export/supplier`).
+  - `Investors/<name>.xlsx`: reuses `/export/investor`.
+  - `Daily entries.csv`: every day row with names and dates, not ids, for Excel.
+  - `_restore/`: the raw tables as now (json), kept only so the app can be restored from it. README says not to edit it.
+- Names, dates and rupees everywhere; no ids or column names like `opening_due` outside `_restore/`.
+- Test: open every file in Excel; the totals in `Summary.xlsx` match the app's dashboard and bills.
+- Later (backlog): "Restore from backup" reads `_restore/`.
+
+Done: everything above except the PDF of printed bills (printing happens in the browser, so the server
+cannot make it yet; the Excel month files have the same numbers). Takes about 20 s on the dev PC.
+
+## 3. Outstanding (advance) control and khaata open/close
 
 Today: the bill shows "Advance outstanding" (`advances` table, running sum). Closing a month has a free
 "Cut from the advance" number with no limit check. Cuts are stored as `advances` rows of kind `bill_cut`.
@@ -50,10 +75,20 @@ Today: the bill shows "Advance outstanding" (`advances` table, running sum). Clo
   stops bringing flowers (no more bills), or can bills continue without a khaata? Does a write-off reduce
   investors' money?
 
-## 3. Works offline on phones (iPhone and Android)
+## 4. Works offline on phones (iPhone and Android)
 
 Goal: the app opens and works with no internet; all data is kept on the phone; changes upload by themselves
 when the internet comes back.
+
+**Why (owner, 2026-11-25):** if the server is ever gone, the data must be completely safe on the phones.
+A server error must never overwrite the real data. So:
+- The phone copy is only ever *added to* or *updated* by a successful sync. An error, timeout, empty reply,
+  wrong address or a reply from a different/blank database never deletes or replaces anything on the phone.
+- Each sync checks it is talking to the same database (a database id from the server, saved on first sync) and
+  that counts did not drop sharply; if either fails, sync stops and shows a warning instead of applying it.
+- Deletions only come through the server's deletions log, one by one, never by "the server no longer has it".
+- The phone can export its own copy as the readable backup zip (section 2) with no server at all, and the
+  server can be refilled from a phone copy (restore).
 
 ### 3a. App works without internet (installable)
 - Web app manifest + icons, so it can be added to the home screen (iPhone: Safari > Share > Add to Home
@@ -84,28 +119,6 @@ when the internet comes back.
 
 ### Order
 3a → 3b read-only → offline daily entry and kharcha → offline bill editing → the rest.
-
-## 4. Backup that a person can read
-
-Today `/export/backup` is a zip of raw database tables (`json/` and `csv/`, one file per table, with ids and
-foreign keys such as `supplier_id = 17`). It can be restored, but nobody can read it.
-
-New zip layout (Settings → Download backup):
-- `PetalBoard backup 2026-11-25/`
-  - `README.txt`: what each file is, in plain words (English + Urdu).
-  - `Summary.xlsx`: suppliers (name, Urdu name, flower, khaata open/closed, outstanding, last bill),
-    who owes whom right now, month-by-month totals, investors and their earnings.
-  - `Bills/2026-10 October.xlsx`: one workbook per month, one sheet per supplier laid out like the paper bill
-    (day, weight, rate, amount, kharcha, then commission, net, kharcha, final, paid, carried), plus a
-    first sheet listing every bill of the month with totals.
-  - `Bills/2026-10 October.pdf`: the printed bills (same as Print all), optional because it makes the zip larger.
-  - `Suppliers/<name>.xlsx`: each supplier's full history and outstanding history (reuses `/export/supplier`).
-  - `Investors/<name>.xlsx`: reuses `/export/investor`.
-  - `Daily entries.csv`: every day row with names and dates, not ids, for Excel.
-  - `_restore/`: the raw tables as now (json), kept only so the app can be restored from it. README says not to edit it.
-- Names, dates and rupees everywhere; no ids or column names like `opening_due` outside `_restore/`.
-- Test: open every file in Excel; the totals in `Summary.xlsx` match the app's dashboard and bills.
-- Later (backlog): "Restore from backup" reads `_restore/`.
 
 ## Earlier backlog
 See the "Next steps" in `CLAUDE.md` (owner questions, August 2026, closing months in order, deployment items).
