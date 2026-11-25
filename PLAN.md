@@ -144,9 +144,10 @@ restored (no passwords in copies): create the owner login on the new server firs
 users become empty. Test `test_restore_from_a_device_copy`; the full dev data (164 bills) restored into a fresh
 database gave identical bills.
 
-Still to do in 4b:
-- Settings button for restore (owner): pick the file, show the counts, upload as the request body. Until then:
-  `curl -X POST -H "Authorization: Bearer <token>" --data-binary @copy.json <api>/restore`.
+Restore button (done 2026-11-25): Settings → "Restore a new server" (owner): pick a device copy (.json) or backup
+zip, the counts and months in the file are shown, then it uploads to `POST /restore`. Checked in headless Chrome
+against an empty database: a wrong file is refused before upload, the full dev copy loads (164 bills), a second try
+is refused with "This server already has data".
 
 ### 4c. Changes made offline upload later
 - Every change goes to an "outbox" in IndexedDB first, shown at once on screen, then sent in order.

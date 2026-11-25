@@ -33,6 +33,18 @@ import App from '../layouts/App.astro';
       </div>
     </section>
 
+    <section class="card card-pad space-y-3 hidden" id="restore-card">
+      <div>
+        <h2 class="font-semibold">Restore a new server</h2>
+        <p class="text-sm text-muted">Only for a <b>new, empty</b> server, after the old one was lost. Pick a device's copy (.json from "Download this device's copy") or a full backup (.zip). A server that already has bills or suppliers refuses it, so nothing is ever overwritten. Logins are not in the copy: people need new logins on the new server.</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <input type="file" id="restore-file" accept=".json,.zip,application/json,application/zip" class="text-sm" />
+        <button class="btn-ghost" id="restore-go" disabled>Restore</button>
+      </div>
+      <div id="restore-info" class="text-sm text-muted"></div>
+    </section>
+
     <section class="card card-pad">
       <div class="flex items-center justify-between gap-2">
         <div><h2 class="font-semibold">Shop details</h2><p class="text-sm text-muted">Bills are printed on the shop's own form (<code>web/public/bill/empty-bill.jpg</code>). To change the names or phone numbers on the bill, replace that image with a new blank form of the same size and layout.</p></div>
@@ -68,7 +80,7 @@ import App from '../layouts/App.astro';
 </App>
 
 <script>
-  import { api, can, getUser } from '../lib/api';
+  import { api, API_URL, can, getToken, getUser } from '../lib/api';
   import { esc } from '../lib/format';
   import { busy, dialog, download, toast } from '../lib/ui';
   import { deviceCopy, getState, syncNow, type SyncState } from '../lib/offline';
@@ -191,6 +203,56 @@ import App from '../layouts/App.astro';
     if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
     window.dispatchEvent(new Event('themechange'));
   }));
+
+
+  // ---- restore a new, empty server from a copy ----
+  const NAMES: Record<string, string> = { suppliers: 'suppliers', bills: 'bills', bill_days: 'days', kharcha: 'kharcha', advances: 'advance entries', investors: 'investors' };
+  function countsText(c: Record<string, number>) {
+    return Object.keys(NAMES).filter((k) => k in c).map((k) => `${(c[k] || 0).toLocaleString()} ${NAMES[k]}`).join(' · ');
+  }
+  async function readRestoreFile(f: File): Promise<string> {
+    if (/\.zip$/i.test(f.name)) return `Backup zip, ${(f.size / 1048576).toFixed(1)} MB.`;
+    let data: any;
+    try { data = JSON.parse(await f.text()); } catch { throw new Error('This file is not a PetalBoard copy.'); }
+    if (!data || !Array.isArray(data.bills) || !Array.isArray(data.suppliers)) throw new Error('This file has no bills or suppliers.');
+    const c: Record<string, number> = {};
+    for (const k of Object.keys(NAMES)) if (Array.isArray(data[k])) c[k] = data[k].length;
+    const months = data.bills.map((b: any) => String(b.month || '').slice(0, 7)).filter(Boolean).sort();
+    return `${countsText(c)}${months.length ? ` · ${months[0]} to ${months[months.length - 1]}` : ''}`;
+  }
+  if (can('owner')) {
+    $('restore-card').classList.remove('hidden');
+    const input = $('restore-file') as HTMLInputElement;
+    const go = $('restore-go') as HTMLButtonElement;
+    input.addEventListener('change', async () => {
+      const f = input.files?.[0];
+      go.disabled = true;
+      $('restore-info').textContent = '';
+      if (!f) return;
+      try {
+        $('restore-info').textContent = 'In this file: ' + (await readRestoreFile(f));
+        go.disabled = false;
+      } catch (ex: any) { $('restore-info').innerHTML = `<span class="text-bad">${esc(ex.message)}</span>`; }
+    });
+    go.addEventListener('click', async () => {
+      const f = input.files?.[0];
+      if (!f) return;
+      const ok = await dialog('Load this copy into the server?', `<p class="text-sm">${esc(f.name)} will be loaded into the server at <b>${esc(API_URL)}</b>. This only works if that server is new and empty.</p>`, 'Restore');
+      if (!ok) return;
+      await busy(go, async () => {
+        try {
+          const res = await fetch(API_URL + '/restore', { method: 'POST', headers: { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/octet-stream' }, body: f });
+          const data = await res.json().catch(() => null);
+          if (!res.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : `Error ${res.status}`);
+          $('restore-info').innerHTML = `<span class="text-good">Restored: ${esc(countsText(data.restored || {}))}.</span> Devices that used the old server will say "Update stopped" (a different server): check a few bills here, then tap "The server is right" on each of them.`;
+          toast('Restored');
+          syncNow().catch(() => {});
+        } catch (ex: any) {
+          $('restore-info').innerHTML = `<span class="text-bad">${esc(ex.message === 'Failed to fetch' ? 'Cannot reach the server.' : ex.message)}</span>`;
+        }
+      });
+    });
+  }
 
   if (can('owner')) {
     $('backup').addEventListener('click', (e) => download('/export/backup', e.currentTarget as HTMLButtonElement));
