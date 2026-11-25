@@ -85,8 +85,8 @@ const nav = [
         <div class="flex-1 min-w-0 pb-20 lg:pb-0">
           <header class="no-print lg:hidden sticky top-0 z-30 bg-panel/90 backdrop-blur border-b border-line h-14 flex items-center justify-between px-4">
             <a href="/" class="flex items-center gap-2"><img src="/favicon.svg" alt="" class="w-7 h-7" /><span class="font-semibold">PetalBoard</span></a>
-            <div class="flex items-center gap-1">
-              <a href="/settings#sync" data-outbox class="hidden chip whitespace-nowrap" title="Changes on this device"></a>
+            <div class="flex items-center gap-1 min-w-0">
+              <a href="/settings#sync" data-outbox data-short class="hidden chip whitespace-nowrap" title="Changes on this device"></a>
               <button class="btn-ghost !px-2 !py-1.5" data-theme-toggle aria-label="Switch light or dark">
                 <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" /></svg>
               </button>
@@ -115,8 +115,9 @@ const nav = [
     )}
     <style is:global>
       /* Room for the offline notice at the top. */
-      html.is-offline body { padding-top: 1.5rem; }
-      html.is-offline header.sticky { top: 1.5rem; }
+      /* --offline-h is the notice's real height: on a phone it wraps onto two or three lines. */
+      html.is-offline body { padding-top: var(--offline-h, 1.5rem); }
+      html.is-offline header.sticky { top: var(--offline-h, 1.5rem); }
     </style>
     <div id="offline-banner" role="status" class="hidden no-print fixed top-0 inset-x-0 z-[55] bg-warn text-white text-xs font-medium text-center py-1 px-3"></div>
     <div id="toasts" class="no-print fixed z-[60] bottom-24 lg:bottom-6 right-4 left-4 sm:left-auto flex flex-col items-end gap-2 pointer-events-none" aria-live="polite"></div>
@@ -130,12 +131,15 @@ const nav = [
       let savedTimer: any = null;
       function showOutbox(st: OutboxStatus, justSent = false) {
         const offline = document.documentElement.classList.contains('is-offline');
-        let text = '', cls = '';
-        if (st.waiting) { text = st.sending ? `Sending ${st.waiting}…` : `${offline ? 'Offline · ' : ''}${st.waiting} change${st.waiting > 1 ? 's' : ''} waiting`; cls = 'bg-warn/10 text-warn'; }
-        else if (st.problems) { text = `${st.problems} to check`; cls = 'bg-bad/10 text-bad'; }
-        else if (justSent) { text = 'All saved'; cls = 'bg-good/10 text-good'; }
+        let text = '', short = '', cls = '';
+        if (st.waiting) {
+          text = st.sending ? `Sending ${st.waiting}…` : `${offline ? 'Offline · ' : ''}${st.waiting} change${st.waiting > 1 ? 's' : ''} waiting`;
+          short = st.sending ? `Sending ${st.waiting}…` : `${st.waiting} waiting`;
+          cls = 'bg-warn/10 text-warn';
+        } else if (st.problems) { text = short = `${st.problems} to check`; cls = 'bg-bad/10 text-bad'; }
+        else if (justSent) { text = 'All saved'; short = 'Saved'; cls = 'bg-good/10 text-good'; }
         document.querySelectorAll<HTMLElement>('[data-outbox]').forEach((a) => {
-          a.textContent = text;
+          a.textContent = a.hasAttribute('data-short') ? short : text;
           a.className = `chip whitespace-nowrap ${cls} ${text ? '' : 'hidden'}`;
           a.title = st.problems ? 'Some changes need checking: see Settings → Sync problems' : 'Changes made on this device';
         });
@@ -146,6 +150,8 @@ const nav = [
       window.addEventListener('petalboard:outbox-sent', () => outboxStatus().then((st) => showOutbox(st, true)));
       if (getToken()) outboxStatus();
       const banner = document.getElementById('offline-banner')!;
+      const fitBanner = () => document.documentElement.style.setProperty('--offline-h', `${banner.offsetHeight}px`);
+      window.addEventListener('resize', () => { if (!banner.classList.contains('hidden')) fitBanner(); });
       window.addEventListener('petalboard:offline', (e: Event) => {
         const at = new Date((e as CustomEvent).detail.at);
         const when = at.toDateString() === new Date().toDateString()
@@ -154,6 +160,7 @@ const nav = [
         banner.textContent = `No connection to the server · showing data saved on this device at ${when} · changes are kept on this device and sent when it is back`;
         banner.classList.remove('hidden');
         document.documentElement.classList.add('is-offline');
+        fitBanner();
       });
       window.addEventListener('petalboard:online', () => {
         banner.classList.add('hidden');
