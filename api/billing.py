@@ -133,6 +133,17 @@ def load_bill(conn, bill_id: int) -> dict:
                 )
         rows.append(row)
 
+    # Rows on a day the month does not have (the workbook has a 31 June): counted, but not on the sheet.
+    month_name = f"{bill['month']:%B %Y}"
+    for d in days:
+        if d["day"] > n_days:
+            warnings.append(f"Day {d['day']} is not in {month_name}, but this bill has "
+                            f"{as_num(d['weight'])} × {as_num(d['rate'])} = {int(d['amount']):,} on it (counted in the total)")
+    for k in kh:
+        if k["day"] > n_days:
+            warnings.append(f"Day {k['day']} is not in {month_name}, but this bill has kharcha "
+                            f"{int(k['amount']):,} on it (counted in the total)")
+
     t = totals([int(d["amount"]) for d in days], [int(k["amount"]) for k in kh], bill["commission_pct"], int(bill["opening_due"]))
     weights = [Decimal(str(d["weight"])) for d in days if d["weight"] is not None]
     t["weight"] = as_num(sum(weights)) if weights else 0

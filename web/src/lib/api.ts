@@ -3,7 +3,7 @@
 const PRODUCTION_API = 'https://api.129.213.60.139.sslip.io';
 export const API_URL: string = (import.meta.env.PUBLIC_API_URL || PRODUCTION_API).replace(/\/$/, '');
 
-import { savedResponse, saveResponse } from './offline';
+import { deviceAnswer, saveResponse } from './offline';
 
 const TOKEN_KEY = 'petalboard_token';
 const USER_KEY = 'petalboard_user';
@@ -57,7 +57,12 @@ export async function api<T = any>(
   const keep = method === 'GET' && !path.startsWith('/sync') && !path.startsWith('/export') && !path.startsWith('/auth');
   /** No server: show what was saved on this device the last time, if anything. */
   const fromDevice = async (why: string) => {
-    const saved = keep ? await savedResponse(url) : null;
+    let saved: { data: any; at: number } | null = null;
+    try {
+      saved = keep ? await deviceAnswer(url) : null;
+    } catch (e: any) {
+      throw new ApiError(e?.status || 0, e?.message || why);
+    }
     if (!saved) throw new ApiError(0, why);
     window.dispatchEvent(new CustomEvent('petalboard:offline', { detail: { at: saved.at } }));
     return saved.data as T;

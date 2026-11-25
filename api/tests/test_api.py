@@ -316,3 +316,20 @@ def test_sync_sends_changes_and_deletions(client, flower):
     d2 = client.get("/sync", params={"since": d["rev"]}).json()
     assert {(x["table"], x["key"]) for x in d2["deletions"]} == {("kharcha", str(k)), ("bill_days", f"{bid}:3")}
     assert client.get("/sync", params={"since": d2["rev"]}).json()["tables"]["bills"] == []
+
+
+def test_row_on_a_day_the_month_lacks(client, flower):
+    """The workbook has a row dated 31 June: it counts, the bill warns, and the month report still works."""
+    import db
+    s = client.post("/suppliers", json={"name": "Test June31", "flower_id": flower["id"]}).json()
+    bill = client.post("/bills", json={"supplier_id": s["id"], "month": "2026-06"}).json()
+    client.put(f"/bills/{bill['id']}/days/30", json={"weight": 2, "rate": 100})
+    with db.transaction() as conn:   # the API refuses day 31 in June; only an import can write it
+        conn.execute("INSERT INTO bill_days (bill_id, day, weight, rate, amount) VALUES (%s, 31, 3, 250, 750)", (bill["id"],))
+    b = client.get(f"/bills/{bill['id']}").json()
+    assert len(b["days"]) == 30
+    assert b["totals"]["total"] == 200 + 750
+    assert any("Day 31 is not in June 2026" in w for w in b["warnings"])
+    r = client.get("/reports/month", params={"month": "2026-06"})
+    assert r.status_code == 200, r.text
+    assert len(r.json()["daily"]) == 30

@@ -127,10 +127,18 @@ Done (2026-11-25):
   offline bills list and bill open with the notice; add and delete of a kharcha reach the device; a 500, a
   strange reply, an empty database and another db_id each change nothing (the last two show "Update stopped").
 
+Done (2026-11-25, second part):
+- `web/src/lib/local.ts`: the server's arithmetic in TypeScript (bill, bill lists, neighbours, daily, month report,
+  entries in any range, overview, balances, flowers). With no server, `api()` uses it when the device copy is newer
+  than the saved page or the page was never saved. Supplier and investor pages still rely on saved pages (all are
+  saved after each sync).
+- `node scripts/check-local.mjs` (from `web/`, dev API running) compares local and server answers: 409 answers, 0 differ.
+  Run it after changing the arithmetic on either side.
+- It found a server crash: the workbook has a row on 31 June (Baloch, 750), which broke the June month report.
+  Fixed; the bill now warns about it; noted in Q24. Checked in headless Chrome with the API stopped: March bills,
+  a March bill, Reports Feb–Mar, daily 10 March and the February dashboard all open from the device.
+
 Still to do in 4b:
-- Pages that were never saved (e.g. other months, Reports with any date range) show an error offline. Next: work
-  those out from the table copy on the phone (port the bill arithmetic from `api/billing.py` to TypeScript, with
-  a test comparing both on every imported bill).
 - Restore the server from a device copy (an owner-only upload that loads the .json).
 
 ### 4c. Changes made offline upload later

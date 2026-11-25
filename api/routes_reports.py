@@ -53,15 +53,16 @@ def month_report(month: str, user: dict = Depends(current_user)):
     daily = [{"day": d, "weight": 0.0, "amount": 0, "kharcha": 0, "suppliers": 0, "by_flower": {}} for d in range(1, n + 1)]
     flower_tot: dict[str, dict] = {}
     for r in day_rows:
-        row = daily[r["day"] - 1]
         w, a = float(r["weight"] or 0), int(r["amount"] or 0)
-        row["weight"] = round(row["weight"] + w, 3)
-        row["amount"] += a
-        row["suppliers"] += r["suppliers"]
-        row["by_flower"][r["flower"]] = {
-            "weight": round(w, 3), "amount": a, "avg_rate": round(a / w, 1) if w else None,
-            "min_rate": as_num(r["min_rate"]), "max_rate": as_num(r["max_rate"]),
-        }
+        if r["day"] <= n:   # a row on e.g. 31 June (from the workbook) counts in the totals only
+            row = daily[r["day"] - 1]
+            row["weight"] = round(row["weight"] + w, 3)
+            row["amount"] += a
+            row["suppliers"] += r["suppliers"]
+            row["by_flower"][r["flower"]] = {
+                "weight": round(w, 3), "amount": a, "avg_rate": round(a / w, 1) if w else None,
+                "min_rate": as_num(r["min_rate"]), "max_rate": as_num(r["max_rate"]),
+            }
         ft = flower_tot.setdefault(r["flower"], {"flower": r["flower"], "weight": 0.0, "amount": 0,
                                                  "min_rate": None, "max_rate": None})
         ft["weight"] += w
@@ -71,7 +72,8 @@ def month_report(month: str, user: dict = Depends(current_user)):
             if v is not None:
                 ft[key] = v if ft[key] is None else fn(ft[key], v)
     for r in kh_rows:
-        daily[r["day"] - 1]["kharcha"] = int(r["amount"])
+        if r["day"] <= n:
+            daily[r["day"] - 1]["kharcha"] = int(r["amount"])
     for ft in flower_tot.values():
         ft["weight"] = round(ft["weight"], 3)
         ft["avg_rate"] = round(ft["amount"] / ft["weight"], 1) if ft["weight"] else None

@@ -14,6 +14,7 @@
 //   - If a reply would make the copy much smaller (e.g. 300 bills here, 20 on the server), it is
 //     refused and a warning is shown. Someone must choose to accept it in Settings.
 import { API_URL, getToken } from './api';
+import { LOCAL_TABLES, LocalError, localAnswer, type Tables } from './local';
 
 export const SYNC_TABLES = ['shop_settings', 'users', 'flowers', 'suppliers', 'investors', 'bills', 'bill_days', 'kharcha',
   'advances', 'khaata_shares', 'investor_entries', 'khaatas'] as const;
@@ -97,6 +98,35 @@ export async function savedResponse(url: string): Promise<{ data: any; at: numbe
   } catch {
     return null;
   }
+}
+
+// ---------- answers worked out from the full copy ----------
+
+let tablesCache: { rev: number; tables: Tables } | null = null;
+async function deviceTables(rev: number): Promise<Tables> {
+  if (tablesCache?.rev === rev) return tablesCache.tables;
+  const db = await openDb();
+  const tx = db.transaction(LOCAL_TABLES);
+  const tables: Tables = {};
+  for (const t of LOCAL_TABLES) tables[t] = await done(tx.objectStore(t).getAll());
+  tablesCache = { rev, tables };
+  return tables;
+}
+
+/** What to show for GET `url` with no server: the page saved last time, or the answer worked out from
+ *  this device's copy of the tables when that copy is newer (or nothing was saved for this page).
+ *  Throws { status: 404 } style errors when the copy says the thing does not exist. */
+export async function deviceAnswer(url: string): Promise<{ data: any; at: number } | null> {
+  const saved = await savedResponse(url);
+  const s = await getState();
+  if (!s.rev || !s.lastSync || (saved && saved.at >= s.lastSync)) return saved;
+  try {
+    const data = localAnswer(keyOf(url), await deviceTables(s.rev));
+    if (data !== undefined) return { data, at: s.lastSync };
+  } catch (e) {
+    if (e instanceof LocalError && !saved) throw e;
+  }
+  return saved;
 }
 
 // ---------- the full copy ----------
@@ -197,6 +227,7 @@ async function doSync({ force = false, accept = false }): Promise<SyncState> {
     if (del.table === 'bill_days' || del.table === 'kharcha' || del.table === 'bills') changedBills.add(-1); // something changed
   }
   await finished(tx);
+  tablesCache = null;
   const counts: Record<string, number> = {};
   const ctx = db.transaction([...SYNC_TABLES]);
   for (const t of SYNC_TABLES) counts[t] = await done(ctx.objectStore(t).count());
