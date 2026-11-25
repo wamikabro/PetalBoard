@@ -1,5 +1,6 @@
 """Suppliers, flowers, advances and the shop details printed on bills."""
 
+import json
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -186,9 +187,13 @@ def get_supplier(supplier_id: int, user: dict = Depends(current_user)):
             (supplier_id,),
         ).fetchall()
         advances = conn.execute(
-            "SELECT id, on_date, amount, kind, bill_id, note FROM advances WHERE supplier_id = %s ORDER BY on_date, id",
+            """SELECT a.id, a.on_date, a.amount, a.kind, a.bill_id, a.note, to_char(b.month, 'YYYY-MM') AS bill_month,
+                      u.display_name AS by_name
+               FROM advances a LEFT JOIN bills b ON b.id = a.bill_id LEFT JOIN users u ON u.id = a.created_by
+               WHERE a.supplier_id = %s ORDER BY a.on_date, a.id""",
             (supplier_id,),
         ).fetchall()
+        khaata = khaata_info(conn, supplier_id)
         position = _position(conn, supplier_id)
         shares = conn.execute(
             """SELECT ks.id, ks.investor_id, i.name AS investor_name, ks.pct, ks.from_month, ks.to_month, ks.note
@@ -224,6 +229,7 @@ def get_supplier(supplier_id: int, user: dict = Depends(current_user)):
         "kharcha": [{"date": k["on_date"].isoformat(), "amount": int(k["amount"]), "tag": k["tag"], "note": k["note"],
                      "bill_id": k["bill_id"]} for k in kharcha],
         "advances": advances,
+        "khaata": khaata,
         "shares": [{**x, "pct": as_num(x["pct"]), "from_month": x["from_month"].isoformat()[:7],
                     "to_month": x["to_month"].isoformat()[:7] if x["to_month"] else None} for x in shares],
         "investor_earnings": inv_rows,
@@ -270,5 +276,130 @@ def delete_advance(advance_id: int, user: dict = Depends(require("owner"))):
         row = get_or_404(conn, "advances", advance_id)
         if row["kind"] == "bill_cut":
             raise HTTPException(400, "This was cut from a bill. Reopen that bill instead.")
+        if row["kind"] == "written_off":
+            raise HTTPException(400, "This was written off when the khaata was closed. Reopen the khaata instead.")
         conn.execute("DELETE FROM advances WHERE id = %s", (advance_id,))
     return {"ok": True}
+
+
+# ---------- khaata: close, renew, reopen ----------
+# A khaata is never closed on its own (some suppliers never ask for what is left); the editor decides.
+
+def _first_date(conn, supplier_id: int) -> date | None:
+    return conn.execute(
+        """SELECT least((SELECT min(month) FROM bills WHERE supplier_id = %s),
+                        (SELECT min(on_date) FROM advances WHERE supplier_id = %s)) AS d""",
+        (supplier_id, supplier_id)).fetchone()["d"]
+
+
+def khaata_info(conn, supplier_id: int) -> dict:
+    """The khaata now (open unless the latest one was closed) and every earlier one."""
+    rows = conn.execute(
+        """SELECT k.*, uc.display_name AS closed_by_name, uo.display_name AS created_by_name
+           FROM khaatas k LEFT JOIN users uc ON uc.id = k.closed_by LEFT JOIN users uo ON uo.id = k.created_by
+           WHERE k.supplier_id = %s ORDER BY k.opened_on, k.id""", (supplier_id,)).fetchall()
+    history = [{
+        "id": r["id"], "opened_on": r["opened_on"].isoformat(), "terms": r["terms"],
+        "commission_pct": as_num(r["commission_pct"]) if r["commission_pct"] is not None else None,
+        "closed_on": r["closed_on"].isoformat() if r["closed_on"] else None, "close_reason": r["close_reason"],
+        "written_off": r["written_off"], "closed_by": r["closed_by_name"], "opened_by": r["created_by_name"],
+    } for r in rows]
+    if not history:
+        first = _first_date(conn, supplier_id)
+        history = [{"id": None, "opened_on": first.isoformat() if first else None, "terms": None, "commission_pct": None,
+                    "closed_on": None, "close_reason": None, "written_off": None, "closed_by": None, "opened_by": None}]
+    current = history[-1]
+    return {"status": "closed" if current["closed_on"] else "open", "current": current, "history": history,
+            "outstanding": advance_balance(conn, supplier_id)}
+
+
+class KhaataClose(BaseModel):
+    on_date: date
+    reason: str | None = None
+    write_off: bool = Field(default=False, description="Must be true when something is still outstanding")
+
+
+@router.post("/suppliers/{supplier_id}/khaata/close")
+def close_khaata(supplier_id: int, body: KhaataClose, user: dict = Depends(require("manager"))):
+    with db.transaction(user["id"]) as conn:
+        get_or_404(conn, "suppliers", supplier_id)
+        info = khaata_info(conn, supplier_id)
+        if info["status"] == "closed":
+            raise HTTPException(400, "This khaata is already closed. Renew it to start a new one.")
+        cur = info["current"]
+        if cur["opened_on"] and body.on_date.isoformat() < cur["opened_on"]:
+            raise HTTPException(400, f"The khaata was opened on {cur['opened_on']}; it cannot close before that.")
+        left = info["outstanding"]
+        if left and not body.write_off:
+            raise HTTPException(400, f"Rs {left:,} is still outstanding. Choose to write it off to close the khaata, "
+                                     "or recover it first.")
+        if left:
+            insert_row(conn, "advances", {
+                "supplier_id": supplier_id, "on_date": body.on_date, "amount": -left, "kind": "written_off",
+                "note": "Written off when the khaata was closed" + (f": {body.reason}" if body.reason else ""),
+                "created_by": user["id"]})
+        # Investor shares of this khaata end with the closing month (kept so a reopen can put them back).
+        month = body.on_date.replace(day=1)
+        ended = conn.execute(
+            """SELECT id, to_month FROM khaata_shares
+               WHERE supplier_id = %s AND (to_month IS NULL OR to_month > %s) AND from_month <= %s""",
+            (supplier_id, month, month)).fetchall()
+        if ended:
+            conn.execute("UPDATE khaata_shares SET to_month = %s WHERE id = ANY(%s)", (month, [r["id"] for r in ended]))
+        closing = {"closed_on": body.on_date, "close_reason": body.reason, "written_off": left or None,
+                   "closed_by": user["id"],
+                   "ended_shares": json.dumps([{"id": r["id"], "to_month": r["to_month"].isoformat() if r["to_month"] else None}
+                                               for r in ended])}
+        if cur["id"]:
+            sets = ", ".join(f"{k} = %s" for k in closing)
+            conn.execute(f"UPDATE khaatas SET {sets} WHERE id = %s", (*closing.values(), cur["id"]))
+        else:
+            opened = date.fromisoformat(cur["opened_on"]) if cur["opened_on"] else body.on_date
+            insert_row(conn, "khaatas", {"supplier_id": supplier_id, "opened_on": min(opened, body.on_date), **closing})
+        return khaata_info(conn, supplier_id)
+
+
+class KhaataRenew(BaseModel):
+    on_date: date
+    terms: str | None = None
+    commission_pct: float | None = Field(default=None, ge=0, le=100)
+    advance: int | None = Field(default=None, gt=0, description="New advance given with the renewed khaata")
+
+
+@router.post("/suppliers/{supplier_id}/khaata/renew")
+def renew_khaata(supplier_id: int, body: KhaataRenew, user: dict = Depends(require("manager"))):
+    with db.transaction(user["id"]) as conn:
+        get_or_404(conn, "suppliers", supplier_id)
+        info = khaata_info(conn, supplier_id)
+        if info["status"] == "open":
+            raise HTTPException(400, "The khaata is still open. Close it before starting a new one.")
+        if body.on_date.isoformat() < info["current"]["closed_on"]:
+            raise HTTPException(400, f"The last khaata closed on {info['current']['closed_on']}; "
+                                     "the new one cannot start before that.")
+        insert_row(conn, "khaatas", {"supplier_id": supplier_id, "opened_on": body.on_date, "terms": body.terms,
+                                     "commission_pct": body.commission_pct, "created_by": user["id"]})
+        if body.commission_pct is not None:
+            conn.execute("UPDATE suppliers SET commission_pct = %s WHERE id = %s", (body.commission_pct, supplier_id))
+        if body.advance:
+            insert_row(conn, "advances", {"supplier_id": supplier_id, "on_date": body.on_date, "amount": body.advance,
+                                          "kind": "given", "note": "Advance with the renewed khaata",
+                                          "created_by": user["id"]})
+        return khaata_info(conn, supplier_id)
+
+
+@router.post("/suppliers/{supplier_id}/khaata/reopen")
+def reopen_khaata(supplier_id: int, user: dict = Depends(require("owner"))):
+    """Undo a closing done by mistake: removes the write-off and puts the investor shares back."""
+    with db.transaction(user["id"]) as conn:
+        get_or_404(conn, "suppliers", supplier_id)
+        info = khaata_info(conn, supplier_id)
+        if info["status"] == "open":
+            raise HTTPException(400, "The khaata is already open.")
+        k = conn.execute("SELECT * FROM khaatas WHERE id = %s", (info["current"]["id"],)).fetchone()
+        conn.execute("DELETE FROM advances WHERE supplier_id = %s AND kind = 'written_off' AND on_date = %s",
+                     (supplier_id, k["closed_on"]))
+        for sh in k["ended_shares"] or []:
+            conn.execute("UPDATE khaata_shares SET to_month = %s WHERE id = %s", (sh["to_month"], sh["id"]))
+        conn.execute("""UPDATE khaatas SET closed_on = NULL, close_reason = NULL, written_off = NULL, closed_by = NULL,
+                        ended_shares = NULL WHERE id = %s""", (k["id"],))
+        return khaata_info(conn, supplier_id)

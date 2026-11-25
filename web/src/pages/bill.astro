@@ -45,7 +45,7 @@ import App from '../layouts/App.astro';
         ${line('Net amount', rs(t.net))}
         ${line('Kharcha', '− ' + rs(t.kharcha))}
         ${t.opening_due ? line(t.opening_due > 0 ? 'Owed from last month' : 'Due from last month', (t.opening_due > 0 ? '− ' : '+ ') + rs(Math.abs(t.opening_due))) : ''}
-        ${line('Advance outstanding', rs(bill.advance_balance))}
+        ${line('Advance outstanding', `${rs(bill.advance_balance)} <a class="text-xs text-brand font-normal ml-1" href="/supplier?id=${bill.supplier.id}#advance">history</a>`)}
       </dl>
       ${bill.status === 'closed' ? `
       <div class="rounded-lg bg-sunken p-3 text-sm space-y-1">
@@ -367,6 +367,12 @@ import App from '../layouts/App.astro';
     await queue; // let entries still saving finish, so the final total is up to date
     const f = bill.totals.final;
     const owes = f >= 0;
+    const outstanding = bill.advance_balance;
+    // The most that can be cut: no more than is outstanding, no more than the bill leaves for the supplier.
+    const limit = Math.max(0, Math.min(outstanding, f));
+    const why = outstanding <= 0 ? 'this supplier has no advance outstanding'
+      : f <= 0 ? 'this bill leaves nothing for the supplier'
+      : limit === outstanding ? `only ${rs(outstanding)} is outstanding` : `the bill leaves ${rs(f)} for the supplier`;
     const html = `
       <div class="rounded-lg bg-sunken p-3">
         <p class="text-sm text-muted">Final total for ${monthName(bill.month)}</p>
@@ -375,21 +381,60 @@ import App from '../layouts/App.astro';
       </div>
       <div><label class="label">${owes ? 'Cash paid to supplier now' : 'Cash received from supplier now'} (Rs)</label>
         <input name="cash" type="number" min="0" class="input" value="0" data-calc /></div>
-      ${owes ? `<div><label class="label">Cut from the advance (Rs) · advance now ${rs(bill.advance_balance)}</label>
-        <input name="cut" type="number" min="0" class="input" value="0" data-calc /></div>` : `
+      ${owes ? `<div>
+        <label class="label">Cut from the outstanding advance (Rs) · outstanding ${rs(outstanding)}</label>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mb-1.5" role="group" aria-label="How much to cut">
+          <button type="button" class="btn-ghost !py-1.5 !px-2 text-sm justify-center whitespace-nowrap" data-cut="0">None</button>
+          <button type="button" class="btn-ghost !py-1.5 !px-2 text-sm justify-center whitespace-nowrap" data-cut="${Math.floor(limit / 2)}" ${limit ? '' : 'disabled'}>50% · ${num(Math.floor(limit / 2))}</button>
+          <button type="button" class="btn-ghost !py-1.5 !px-2 text-sm justify-center whitespace-nowrap" data-cut="${limit}" ${limit ? '' : 'disabled'}>Full · ${num(limit)}</button>
+          <button type="button" class="btn-ghost !py-1.5 !px-2 text-sm justify-center whitespace-nowrap" data-cut="custom" ${limit ? '' : 'disabled'}>Custom</button>
+        </div>
+        <input name="cut" type="number" min="0" max="${limit}" step="1" class="input" value="0" data-calc ${limit ? '' : 'readonly'} />
+        <p class="text-xs mt-1 text-muted" id="cut-help">Up to ${rs(limit)}: ${why}.</p>
+      </div>` : `
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="toadv" value="1" data-calc /> Move what is left into the supplier's advance</label>`}
       <p class="text-sm">Carried to next month: <b id="carry" class="tabular-nums"></b></p>
       <div><label class="label">Note (optional)</label><input name="note" class="input" /></div>`;
     const p = dialog('Close the month', html, 'Close month');
     const form = document.body.lastElementChild!.querySelector('form') as HTMLFormElement;
+    const submit = form.querySelector<HTMLButtonElement>('button[type=submit]')!;
+    const cutBox = form.querySelector<HTMLInputElement>('[name=cut]');
     const calc = () => {
       const fd = new FormData(form);
       const cash = Number(fd.get('cash') || 0);
+      const cut = Number(fd.get('cut') || 0);
       let carried: number;
-      if (owes) carried = f - cash - Number(fd.get('cut') || 0);
+      if (owes) carried = f - cash - cut;
       else carried = fd.get('toadv') ? 0 : f + cash;
       form.querySelector('#carry')!.textContent = rsSigned(carried);
+      if (!cutBox) return;
+      // Over the limit: say why and do not allow closing.
+      const bad = cut > limit || cut < 0 || !Number.isInteger(cut);
+      const help = form.querySelector('#cut-help')!;
+      help.textContent = cut > limit ? `Too much: no more than ${rs(limit)} can be cut, because ${why}.`
+        : cut < 0 || !Number.isInteger(cut) ? 'Type a whole amount in rupees.'
+        : `Up to ${rs(limit)}: ${why}.`;
+      help.classList.toggle('text-bad', bad);
+      help.classList.toggle('text-muted', !bad);
+      cutBox.classList.toggle('!border-bad', bad);
+      submit.disabled = bad;
+      const mode = form.dataset.mode || '';
+      form.querySelectorAll<HTMLButtonElement>('[data-cut]').forEach((b) => {
+        const on = b.dataset.cut === 'custom' ? mode === 'custom' : mode !== 'custom' && Number(b.dataset.cut) === cut;
+        b.classList.toggle('bg-brand-soft', on);
+        b.classList.toggle('text-brand', on);
+      });
     };
+    form.addEventListener('click', (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-cut]');
+      if (!b || !cutBox) return;
+      const custom = b.dataset.cut === 'custom';
+      form.dataset.mode = custom ? 'custom' : '';
+      if (!custom) cutBox.value = b.dataset.cut!;
+      else { cutBox.focus(); cutBox.select(); }
+      calc();
+    });
+    cutBox?.addEventListener('input', () => { form.dataset.mode = 'custom'; });
     form.addEventListener('input', calc);
     calc();
     const v = await p;
@@ -402,7 +447,23 @@ import App from '../layouts/App.astro';
       body = { paid_cash: -cash, advance_cut: v.toadv ? left : 0, note: v.note || null };
     }
     await busy(btn, async () => { bill = await api(`/bills/${id}/close`, { method: 'POST', body }); render(); toast('Month closed'); });
+    // The cut paid the advance off: offer (never force) to close the khaata.
+    if (bill.status === 'closed' && body.advance_cut > 0 && bill.advance_balance === 0 && can('manager')) {
+      const [y, m] = bill.month.split('-').map(Number);
+      const monthEnd = `${bill.month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+      const k = await dialog('Outstanding is now 0', `
+        <p class="text-sm">${esc(bill.supplier.name)} has paid back the whole advance. Do you want to close this khaata?</p>
+        <p class="text-sm text-muted">Only if the khaata is really finished. You can renew it later on new terms.</p>
+        <div><label class="label">Reason (optional)</label><input name="reason" class="input" /></div>`, 'Close khaata');
+      if (k) {
+        try {
+          await api(`/suppliers/${bill.supplier.id}/khaata/close`, { method: 'POST', body: { on_date: monthEnd, reason: k.reason || null } });
+          toast('Khaata closed');
+        } catch (ex: any) { toast(ex.message, 'error'); }
+      }
+    }
   }
+
 
   if (!id) page.innerHTML = '<p class="text-bad">No bill chosen. <a class="underline" href="/bills">Go to bills</a></p>';
   else load().catch((e) => (page.innerHTML = `<p class="text-bad">${esc(e.message)}</p>`));

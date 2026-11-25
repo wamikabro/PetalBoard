@@ -141,7 +141,9 @@ def test_entries_range(client):
 
 
 def test_investor_share_and_earnings(client, flower):
-    sid = client.post("/suppliers", json={"name": "Khaata Test", "flower_id": flower["id"]}).json()["id"]
+    r = client.post("/suppliers", json={"name": "Khaata Test", "flower_id": flower["id"]})
+    assert r.status_code == 200, r.text
+    sid = r.json()["id"]
     inv = client.post("/investors", json={"name": "Test Investor"}).json()
     r = client.post("/khaata-shares", json={"supplier_id": sid, "investor_id": inv["id"], "pct": 30, "from_month": "2026-05"})
     assert r.status_code == 200, r.text
@@ -222,3 +224,56 @@ def test_wrong_passwords_are_limited(client):
             assert c.post("/auth/login", json={"password": "owner-pass-1"}).status_code == 429   # even the right one waits
     finally:
         routes_auth._FAILS.clear()
+
+
+def test_advance_cut_limit(client, flower):
+    sid = client.post("/suppliers", json={"name": "Cut Limit", "flower_id": flower["id"]}).json()["id"]
+    client.post(f"/suppliers/{sid}/advances", json={"on_date": "2025-03-01", "amount": 5000, "kind": "given"})
+    bid = client.post("/bills", json={"supplier_id": sid, "month": "2025-03"}).json()["id"]
+    client.put(f"/bills/{bid}/days/5", json={"weight": 100, "rate": 100})        # final 9,000
+    r = client.post(f"/bills/{bid}/close", json={"advance_cut": 6000})
+    assert r.status_code == 400 and "Only Rs 5,000 is outstanding" in r.json()["detail"]
+    client.post(f"/suppliers/{sid}/advances", json={"on_date": "2025-03-02", "amount": 20000, "kind": "given"})
+    r = client.post(f"/bills/{bid}/close", json={"advance_cut": 9001})
+    assert r.status_code == 400 and "leaves Rs 9,000" in r.json()["detail"]
+    assert client.post(f"/bills/{bid}/close", json={"advance_cut": 9000}).status_code == 200
+
+
+def test_khaata_close_renew_reopen(client, flower):
+    r = client.post("/suppliers", json={"name": "Khaata Close Test", "flower_id": flower["id"]})
+    assert r.status_code == 200, r.text
+    sid = r.json()["id"]
+    client.post(f"/suppliers/{sid}/advances", json={"on_date": "2026-07-01", "amount": 8000, "kind": "given"})
+    k = client.get(f"/suppliers/{sid}").json()["khaata"]
+    assert k["status"] == "open" and k["outstanding"] == 8000 and k["current"]["opened_on"] == "2026-07-01"
+    # Something is outstanding: closing needs an explicit write-off.
+    r = client.post(f"/suppliers/{sid}/khaata/close", json={"on_date": "2026-09-30"})
+    assert r.status_code == 400 and "Rs 8,000 is still outstanding" in r.json()["detail"]
+    k = client.post(f"/suppliers/{sid}/khaata/close", json={"on_date": "2026-09-30", "write_off": True, "reason": "stopped"}).json()
+    assert k["status"] == "closed" and k["outstanding"] == 0 and k["current"]["written_off"] == 8000
+    adv = client.get(f"/suppliers/{sid}").json()["advances"]
+    assert adv[-1]["kind"] == "written_off" and adv[-1]["amount"] == -8000
+    assert client.delete(f"/advances/{adv[-1]['id']}").status_code == 400
+    assert client.post(f"/suppliers/{sid}/khaata/close", json={"on_date": "2026-10-01"}).status_code == 400
+    # Reopen (mistake) puts the outstanding back.
+    k = client.post(f"/suppliers/{sid}/khaata/reopen").json()
+    assert k["status"] == "open" and k["outstanding"] == 8000
+    # Close again (write off), then renew on new terms with a new advance.
+    client.post(f"/suppliers/{sid}/khaata/close", json={"on_date": "2026-09-30", "write_off": True})
+    assert client.post(f"/suppliers/{sid}/khaata/renew", json={"on_date": "2026-09-01"}).status_code == 400  # before closing
+    k = client.post(f"/suppliers/{sid}/khaata/renew", json={"on_date": "2026-10-01", "commission_pct": 8, "advance": 3000,
+                                                          "terms": "8% from October"}).json()
+    assert k["status"] == "open" and k["outstanding"] == 3000 and len(k["history"]) == 2
+    assert client.get(f"/suppliers/{sid}").json()["supplier"]["commission_pct"] == 8
+    assert client.post(f"/suppliers/{sid}/khaata/renew", json={"on_date": "2026-10-02"}).status_code == 400  # still open
+
+
+def test_migration_from_version_1(client):
+    import db
+    with db.transaction() as conn:
+        conn.execute("UPDATE schema_meta SET version = 1")
+        conn.execute("DROP TABLE khaatas")
+    db.migrate()
+    with db.transaction() as conn:
+        assert conn.execute("SELECT version FROM schema_meta").fetchone()["version"] == 2
+        assert conn.execute("SELECT to_regclass('public.khaatas') AS t").fetchone()["t"]

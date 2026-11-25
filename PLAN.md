@@ -40,7 +40,7 @@ New zip layout (Settings → Download backup):
 Done: everything above except the PDF of printed bills (printing happens in the browser, so the server
 cannot make it yet; the Excel month files have the same numbers). Takes about 20 s on the dev PC.
 
-## 3. Outstanding (advance) control and khaata open/close
+## 3. Outstanding (advance) control and khaata open/close (done 2026-11-25)
 
 Today: the bill shows "Advance outstanding" (`advances` table, running sum). Closing a month has a free
 "Cut from the advance" number with no limit check. Cuts are stored as `advances` rows of kind `bill_cut`.
@@ -71,9 +71,12 @@ Today: the bill shows "Advance outstanding" (`advances` table, running sum). Clo
   It never closes by itself (some suppliers never ask for theirs; the editor decides).
 - **Renew khaata**: opens a new khaata with new terms (new advance given, commission %, investor shares).
   The old one stays in history.
-- Questions for the owner (add to `data/QUESTIONS.md`, section A): does a closed khaata mean the supplier
-  stops bringing flowers (no more bills), or can bills continue without a khaata? Does a write-off reduce
-  investors' money?
+- Questions for the owner: Q34 and Q35 in `data/QUESTIONS.md` (section A).
+
+Done: cut buttons with limit (screen and API, tests), outstanding history with bill link and who entered it,
+khaata close (write-off only when ticked) / renew (new terms, commission, advance) / undo closing (owner),
+offer to close after a cut brings the outstanding to 0. Database migration v2 (`db.MIGRATIONS`) runs on start.
+Not done: outstanding history on the bill page itself (the bill links to the supplier page's history instead).
 
 ## 4. Works offline on phones (iPhone and Android)
 

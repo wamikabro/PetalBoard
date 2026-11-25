@@ -213,6 +213,24 @@ class CloseIn(BaseModel):
     note: str | None = None
 
 
+def advance_cut_limit(outstanding: int, final: int) -> int:
+    """The most that can be cut from the advance when closing a bill: no more than is outstanding,
+    and no more than the bill leaves for the supplier."""
+    return max(0, min(outstanding, final))
+
+
+def check_advance_cut(cut: int, outstanding: int, final: int) -> None:
+    if cut <= advance_cut_limit(outstanding, final):
+        return
+    if outstanding <= 0:
+        raise HTTPException(400, "Nothing can be cut: this supplier has no advance outstanding.")
+    if final <= 0:
+        raise HTTPException(400, f"Nothing can be cut: this bill leaves nothing for the supplier (final Rs {final:,}).")
+    if cut > outstanding:
+        raise HTTPException(400, f"Only Rs {outstanding:,} is outstanding, so no more than that can be cut.")
+    raise HTTPException(400, f"This bill leaves Rs {final:,} for the supplier, so no more than that can be cut.")
+
+
 def _sync_next_opening(conn, bill: dict, carried: int | None) -> None:
     nxt = conn.execute(
         "SELECT id, status FROM bills WHERE supplier_id = %s AND month > %s ORDER BY month LIMIT 1",
@@ -226,7 +244,10 @@ def _sync_next_opening(conn, bill: dict, carried: int | None) -> None:
 def close_bill(bill_id: int, body: CloseIn, user: dict = Depends(require("manager"))):
     with db.transaction(user["id"]) as conn:
         bill = _open_bill(conn, bill_id)
-        final = load_bill(conn, bill_id)["totals"]["final"]
+        loaded = load_bill(conn, bill_id)
+        final = loaded["totals"]["final"]
+        if body.advance_cut > 0:
+            check_advance_cut(body.advance_cut, loaded["advance_balance"], final)
         carried = final - body.paid_cash - body.advance_cut
         conn.execute(
             """UPDATE bills SET status = 'closed', paid_cash = %s, advance_cut = %s, carried = %s,

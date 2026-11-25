@@ -4,7 +4,7 @@
 BEGIN;
 
 CREATE TABLE schema_meta (version int NOT NULL);
-INSERT INTO schema_meta VALUES (1);
+INSERT INTO schema_meta VALUES (2);  -- keep in step with db.MIGRATIONS
 
 -- People who log in.
 CREATE TABLE users (
@@ -133,19 +133,39 @@ CREATE TABLE kharcha (
 CREATE INDEX kharcha_bill ON kharcha(bill_id, day);
 
 -- Advance (ایڈوانس) given to a supplier, separate from the monthly bill.
--- amount > 0: advance given. amount < 0: recovered (cash back or cut from a bill).
+-- amount > 0: advance given. amount < 0: recovered (cash back or cut from a bill),
+-- or written off when the khaata was closed.
 CREATE TABLE advances (
     id          serial PRIMARY KEY,
     supplier_id int NOT NULL REFERENCES suppliers(id),
     on_date     date NOT NULL,
     amount      bigint NOT NULL CHECK (amount <> 0),
-    kind        text NOT NULL CHECK (kind IN ('given', 'recovered', 'bill_cut', 'opening')),
+    kind        text NOT NULL CHECK (kind IN ('given', 'recovered', 'bill_cut', 'opening', 'written_off')),
     bill_id     int REFERENCES bills(id) ON DELETE CASCADE,
     note        text,
     created_at  timestamptz NOT NULL DEFAULT now(),
     created_by  int REFERENCES users(id)
 );
 CREATE INDEX advances_supplier ON advances(supplier_id, on_date);
+
+-- A supplier's khaata (account) being closed and renewed. No row = open since the first bill.
+-- Closing writes off what is still outstanding (an advances row of kind written_off) only if the
+-- editor chooses to; it is never closed on its own. Renewing starts a new row on new terms.
+CREATE TABLE khaatas (
+    id             serial PRIMARY KEY,
+    supplier_id    int NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+    opened_on      date NOT NULL,
+    terms          text,
+    commission_pct numeric(5,2) CHECK (commission_pct IS NULL OR (commission_pct >= 0 AND commission_pct <= 100)),
+    closed_on      date CHECK (closed_on IS NULL OR closed_on >= opened_on),
+    close_reason   text,
+    written_off    bigint,
+    ended_shares   jsonb,  -- [{id, to_month}] investor shares ended at closing, to put back if reopened
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    created_by     int REFERENCES users(id),
+    closed_by      int REFERENCES users(id)
+);
+CREATE UNIQUE INDEX khaatas_one_open ON khaatas(supplier_id) WHERE closed_on IS NULL;
 
 -- Investors. An investor puts money into a supplier's
 -- khaata (usually the advance) and gets a share of the commission that khaata earns.

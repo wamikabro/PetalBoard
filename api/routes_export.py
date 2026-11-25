@@ -30,7 +30,7 @@ router = APIRouter(tags=["export"])
 
 # Every table, in an order that can be loaded back (parents first). Sessions are left out.
 TABLES = ["shop_settings", "users", "flowers", "suppliers", "investors", "bills", "bill_days", "kharcha",
-          "advances", "khaata_shares", "investor_entries"]
+          "advances", "khaata_shares", "investor_entries", "khaatas"]
 SECRET_COLUMNS = {"users": {"password_hash"}}
 
 

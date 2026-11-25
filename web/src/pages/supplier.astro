@@ -27,7 +27,8 @@ import App from '../layouts/App.astro';
       <div>
         <a href="/suppliers" class="text-sm text-muted hover:text-ink">← Suppliers</a>
         <h1 class="h-title flex items-center gap-2 flex-wrap">${esc(s.name)} ${s.name_ur ? `<span class="urdu text-lg text-muted">${esc(s.name_ur)}</span>` : ''}
-          ${s.active ? '' : '<span class="chip bg-sunken text-muted">Inactive</span>'}</h1>
+          ${s.active ? '' : '<span class="chip bg-sunken text-muted">Inactive</span>'}
+          ${d.khaata.status === 'closed' ? '<span class="chip bg-sunken text-muted">Khaata closed</span>' : ''}</h1>
         <p class="text-sm text-muted">${esc(s.flower_name || 'No flower set')} · ${s.commission_pct}% commission${s.place ? ' · ' + esc(s.place) : ''}</p>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -83,18 +84,20 @@ import App from '../layouts/App.astro';
     ${investorsSection()}
 
     <div class="grid xl:grid-cols-2 gap-4">
-      <section class="card overflow-hidden">
+      <section class="card overflow-hidden" id="advance">
+        ${khaataSection()}
         <div class="card-pad pb-2 flex justify-between items-center">
-          <div><h2 class="font-semibold">Advance (ایڈوانس)</h2><p class="text-xs text-muted">Separate from the monthly bill</p></div>
+          <div><h2 class="font-semibold">Outstanding advance (ایڈوانس)</h2><p class="text-xs text-muted">Separate from the monthly bill · how it went up and down</p></div>
           ${can('manager') ? '<button class="btn-ghost" id="adv">Add / recover</button>' : ''}
         </div>
         <div class="overflow-x-auto max-h-80"><table class="tbl">
-          <thead><tr><th>Date</th><th>What</th><th class="text-right">Amount</th><th class="text-right">Balance</th><th></th></tr></thead>
+          <thead><tr><th>Date</th><th>What</th><th class="text-right">Amount</th><th class="text-right">Outstanding after</th><th></th></tr></thead>
           <tbody>${d.advances.slice().reverse().map((a: any) => `<tr>
             <td class="whitespace-nowrap">${a.on_date}</td>
-            <td>${({ given: 'Given', recovered: 'Recovered', bill_cut: 'Cut from bill', opening: 'Opening' } as any)[a.kind]}${a.note ? `<span class="block text-xs text-muted">${esc(a.note)}</span>` : ''}</td>
+            <td>${ADV_KIND[a.kind] || esc(a.kind)}${a.bill_month ? ` <a class="text-brand" href="/bill?id=${a.bill_id}">${monthShort(a.bill_month)}</a>` : ''}
+              ${a.note || a.by_name ? `<span class="block text-xs text-muted">${esc(a.note || '')}${a.note && a.by_name ? ' · ' : ''}${a.by_name ? 'by ' + esc(a.by_name) : ''}</span>` : ''}</td>
             <td class="num ${a.amount < 0 ? 'neg' : ''}">${rsSigned(a.amount)}</td><td class="num font-medium">${rs(a.running)}</td>
-            <td class="text-right">${can('owner') && a.kind !== 'bill_cut' ? `<button class="text-xs text-muted hover:text-bad" data-del-adv="${a.id}">Delete</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-6">No advance.</td></tr>'}</tbody>
+            <td class="text-right">${can('owner') && a.kind !== 'bill_cut' && a.kind !== 'written_off' ? `<button class="text-xs text-muted hover:text-bad" data-del-adv="${a.id}">Delete</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-6">No advance.</td></tr>'}</tbody>
         </table></div>
       </section>
       <section class="card overflow-hidden">
@@ -106,6 +109,73 @@ import App from '../layouts/App.astro';
         </table></div>
       </section>
     </div>`;
+  }
+
+
+  const ADV_KIND: Record<string, string> = { given: 'Advance given', recovered: 'Paid back in cash', bill_cut: 'Cut from bill',
+    opening: 'Brought in (opening)', written_off: 'Written off (khaata closed)' };
+
+  function khaataSection() {
+    const k = d.khaata, cur = k.current;
+    const closed = k.status === 'closed';
+    const past = k.history.slice(0, -1).reverse();
+    return `
+    <div class="card-pad pb-3 border-b border-line space-y-2">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p class="font-medium flex items-center gap-2">Khaata
+            <span class="chip ${closed ? 'bg-sunken text-muted' : 'bg-good/10 text-good'}">${closed ? 'Closed' : 'Open'}</span></p>
+          <p class="text-xs text-muted">${closed
+            ? `Closed ${esc(cur.closed_on)}${cur.closed_by ? ` by ${esc(cur.closed_by)}` : ''}${cur.written_off ? ` · ${rs(cur.written_off)} written off` : ''}${cur.close_reason ? ` · ${esc(cur.close_reason)}` : ''}`
+            : `Open since ${esc(cur.opened_on || '—')}${cur.terms ? ` · ${esc(cur.terms)}` : ''}${cur.commission_pct != null ? ` · ${cur.commission_pct}% commission` : ''}`}</p>
+        </div>
+        <div class="flex gap-2">
+          ${can('manager') && !closed ? '<button class="btn-ghost !py-1.5 text-sm" id="k-close">Close khaata</button>' : ''}
+          ${can('manager') && closed ? '<button class="btn-primary !py-1.5 text-sm" id="k-renew">Renew khaata</button>' : ''}
+          ${can('owner') && closed ? '<button class="btn-ghost !py-1.5 text-sm" id="k-reopen" title="Undo a closing done by mistake">Undo closing</button>' : ''}
+        </div>
+      </div>
+      ${past.length ? `<details class="text-xs text-muted"><summary class="cursor-pointer">Earlier khaatas (${past.length})</summary>
+        <ul class="mt-1 space-y-0.5">${past.map((h: any) => `<li>${esc(h.opened_on)} → ${esc(h.closed_on || '')}${h.terms ? ` · ${esc(h.terms)}` : ''}${h.written_off ? ` · ${rs(h.written_off)} written off` : ''}${h.close_reason ? ` · ${esc(h.close_reason)}` : ''}</li>`).join('')}</ul></details>` : ''}
+    </div>`;
+  }
+
+  async function closeKhaata(btn: HTMLButtonElement) {
+    const left = d.khaata.outstanding;
+    const v = await dialog('Close this khaata?', `
+      <p class="text-sm">Closing means the khaata has stopped. ${left
+        ? `<b>${rs(left)}</b> is still outstanding.`
+        : 'Nothing is outstanding.'}</p>
+      ${left ? `<label class="flex items-start gap-2 text-sm rounded-lg bg-warn/10 p-3"><input type="checkbox" name="write_off" value="1" class="mt-0.5" />
+        <span>Write off the ${rs(left)} so the outstanding becomes 0. It stays in the history. Leave this unticked and cancel if the supplier will still pay it back.</span></label>` : ''}
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Date</label><input name="on_date" type="date" class="input" value="${today()}" required /></div>
+        <div><label class="label">Reason (optional)</label><input name="reason" class="input" /></div>
+      </div>`, 'Close khaata', true);
+    if (!v) return;
+    if (left && !v.write_off) return toast(`Tick "write off" to close with ${rs(left)} outstanding`, 'error');
+    await busy(btn, async () => {
+      await api(`/suppliers/${id}/khaata/close`, { method: 'POST', body: { on_date: v.on_date, reason: v.reason || null, write_off: !!v.write_off } });
+      toast('Khaata closed'); load();
+    });
+  }
+
+  async function renewKhaata(btn: HTMLButtonElement) {
+    const v = await dialog('Renew the khaata', `
+      <p class="text-sm text-muted">Starts a new khaata on new terms. The closed one stays in the history.</p>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Start date</label><input name="on_date" type="date" class="input" value="${today()}" required /></div>
+        <div><label class="label">Commission %</label><input name="commission_pct" type="number" step="0.01" min="0" max="100" class="input" value="${d.supplier.commission_pct}" /></div>
+      </div>
+      <div><label class="label">New advance given (Rs, optional)</label><input name="advance" type="number" min="0" class="input" /></div>
+      <div><label class="label">Terms (optional)</label><input name="terms" class="input" placeholder="e.g. 8% commission, advance 50,000" /></div>`, 'Renew');
+    if (!v) return;
+    await busy(btn, async () => {
+      await api(`/suppliers/${id}/khaata/renew`, { method: 'POST', body: {
+        on_date: v.on_date, terms: v.terms || null, advance: Number(v.advance) || null,
+        commission_pct: v.commission_pct === '' ? null : Number(v.commission_pct) } });
+      toast('New khaata started'); load();
+    });
   }
 
   function investorsSection() {
@@ -160,7 +230,10 @@ import App from '../layouts/App.astro';
   async function load() {
     [d, flowers] = await Promise.all([api(`/suppliers/${id}`), api('/flowers')]);
     document.title = `${d.supplier.name} · PetalBoard`;
+    const first = !page.dataset.loaded;
     render();
+    page.dataset.loaded = '1';
+    if (first && location.hash) document.querySelector(location.hash)?.scrollIntoView();
   }
 
   page.addEventListener('change', (e) => {
@@ -173,6 +246,12 @@ import App from '../layouts/App.astro';
     const btn = el.closest<HTMLButtonElement>('button');
     if (!btn) return;
     if (btn.id === 'dl') return download(`/export/supplier/${id}.xlsx`, btn);
+    if (btn.id === 'k-close') return closeKhaata(btn);
+    if (btn.id === 'k-renew') return renewKhaata(btn);
+    if (btn.id === 'k-reopen') {
+      if (!(await dialog('Undo closing the khaata?', '<p class="text-sm text-muted">Only for a closing done by mistake. The written-off amount comes back as outstanding and the investor shares are put back.</p>', 'Undo closing'))) return;
+      return busy(btn, async () => { await api(`/suppliers/${id}/khaata/reopen`, { method: 'POST' }); toast('Khaata open again'); load(); });
+    }
     if (btn.dataset.delAdv) {
       if (!(await dialog('Delete this advance entry?', '<p class="text-sm text-muted">Only for mistakes. This cannot be undone.</p>', 'Delete', true))) return;
       await busy(btn, async () => { await api(`/advances/${btn.dataset.delAdv}`, { method: 'DELETE' }); toast('Deleted'); load(); });
