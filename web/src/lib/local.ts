@@ -411,7 +411,7 @@ function balances(d: Data) {
 
 // ---------- settings, suppliers, investors (api/routes_suppliers.py, api/routes_investors.py) ----------
 
-const strip = ({ _key, ...row }: any) => row;
+const strip = ({ _key, _pending, ...row }: any) => row;
 const userName = (d: Data, id: any) => (id == null ? null : (d.t.users || []).find((u) => u.id === id)?.display_name ?? null);
 const FAR = '9999-12-01';
 
@@ -666,49 +666,443 @@ export function localAnswer(path: string, t: Tables): any {
   if ((m = /^\/suppliers\/(-?\d+)$/.exec(p))) return supplierPage(d(), Number(m[1]));
   if (p === '/investors') return investorList(d());
   if ((m = /^\/investors\/(-?\d+)$/.exec(p))) return investorPage(d(), Number(m[1]));
-  if (p === '/flowers') return [...t.flowers].sort((a, b) => Number(b.active) - Number(a.active) || byName(a.name, b.name)).map(({ _key, ...row }: any) => row);
+  if (p === '/flowers') return [...t.flowers].sort((a, b) => Number(b.active) - Number(a.active) || byName(a.name, b.name)).map(strip);
   return undefined;
 }
 
 // ---------- changes still waiting on this device (outbox) ----------
+//
+// Each waiting save is applied to a copy of the tables the way the server will apply it (the routes in
+// api/routes_*.py), so every page shows it at once. Rows made here get the save's temporary negative id
+// and are marked `_pending`. A save the server would refuse throws LocalError; `strict` decides whether
+// that is passed on (checking a new save before it is queued) or the save is just left out (older ones).
 
-/** The tables with this device's unsent changes put on top, worked out the way the server will
- *  (api/routes_bills.py put_daily, delete_kharcha). Pending rows are marked `_pending`. */
-export function applyPending(t: Tables, items: any[]): Tables {
-  if (!items.length) return t;
-  const out: Tables = { ...t, bills: [...(t.bills || [])], bill_days: [...(t.bill_days || [])], kharcha: [...(t.kharcha || [])] };
-  let tmp = -1;
-  for (const it of items) {
-    if (it.kind === 'daily') {
-      const r = it.row, month = monthStart(it.date), day = Number(it.date.slice(8));
-      const touchesDay = 'weight' in r || 'rate' in r || 'note' in r;
-      let bill = out.bills.find((b) => b.supplier_id === r.supplier_id && b.month === month);
-      if (!bill) {
-        const s = (t.suppliers || []).find((x) => x.id === r.supplier_id);
-        if (!s || (r.weight == null && r.rate == null && !r.add_kharcha)) continue;
-        const prev = out.bills.filter((b) => b.supplier_id === s.id && b.month < month).sort((a, b) => byName(b.month, a.month))[0];
-        const template = Object.fromEntries(Object.keys(out.bills[0] || {}).map((k) => [k, null]));
-        bill = { ...template, id: tmp--, _key: `pending-bill-${s.id}-${month}`, supplier_id: s.id, month, flower_id: s.flower_id,
-          commission_pct: s.commission_pct, opening_due: prev?.status === 'closed' && prev.carried ? -Number(prev.carried) : 0,
-          note: null, paper_totals: null, status: 'open', _pending: true };
-        out.bills.push(bill);
-      }
-      if (bill.status !== 'open') continue;
-      if (touchesDay) {
-        const at = out.bill_days.findIndex((x) => x.bill_id === bill.id && x.day === day);
-        if (at >= 0) out.bill_days.splice(at, 1);
-        if (!(r.weight == null && r.rate == null && !r.note)) {
-          out.bill_days.push({ _key: `${bill.id}:${day}`, bill_id: bill.id, day, weight: r.weight ?? null, rate: r.rate ?? null,
-            amount: dayAmount(r.weight, r.rate), note: r.note ?? null, _pending: true });
-        }
-      }
-      if (r.add_kharcha && !(r.kharcha_client_id && out.kharcha.some((k) => k.client_id === r.kharcha_client_id))) {
-        out.kharcha.push({ _key: `pending-${r.kharcha_client_id}`, id: tmp--, client_id: r.kharcha_client_id ?? null, bill_id: bill.id, day,
-          amount: r.add_kharcha, tag: r.kharcha_tag ?? null, note: r.kharcha_note ?? null, _pending: true });
-      }
-    } else if (it.kind === 'kharcha_del') {
-      out.kharcha = out.kharcha.filter((k) => !((it.id != null && k.id === it.id) || (it.client_id && k.client_id === it.client_id)));
+export type Ctx = { userId: number | null; now: string };
+export type PendingItem = {
+  kind: 'daily' | 'kharcha_del' | 'request';
+  date?: string; row?: any; temp_bill?: number | null;
+  id?: number | null; client_id?: string | null;
+  method?: string; path?: string; body?: any; temp_id?: number | null; temp_bills?: Record<string, number>;
+};
+
+/** Columns of tables that can be empty on the device (api/schema.sql + migrations), for rows made here. */
+const COLUMNS: Record<string, string[]> = {
+  advances: ['id', 'supplier_id', 'on_date', 'amount', 'kind', 'bill_id', 'note', 'created_at', 'created_by', 'rev'],
+  khaatas: ['id', 'supplier_id', 'opened_on', 'terms', 'commission_pct', 'closed_on', 'close_reason', 'written_off',
+    'ended_shares', 'created_at', 'created_by', 'closed_by', 'rev'],
+  investors: ['id', 'name', 'phone', 'notes', 'active', 'created_at', 'rev'],
+  khaata_shares: ['id', 'supplier_id', 'investor_id', 'pct', 'from_month', 'to_month', 'note', 'created_at', 'rev'],
+  investor_entries: ['id', 'investor_id', 'supplier_id', 'on_date', 'kind', 'amount', 'note', 'created_at', 'created_by', 'rev'],
+  flowers: ['id', 'name', 'name_ur', 'active', 'rev'],
+};
+const nonNull = (o: any) => Object.fromEntries(Object.entries(o || {}).filter(([, v]) => v !== null && v !== undefined));
+const pick = (o: any, keys: string[]) => Object.fromEntries(Object.entries(o).filter(([k]) => keys.includes(k)));
+const lower = (s: any) => String(s ?? '').trim().toLowerCase();
+const refuse = (msg: string): never => { throw new LocalError(400, msg); };
+const MONTH_NAME = (month: string) => `${MONTHS[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}`;
+
+class Writer {
+  t: Tables;
+  ctx: Ctx;
+  tmp = -1;
+  constructor(t: Tables, ctx: Ctx) {
+    this.t = { ...t };
+    for (const k of Object.keys(this.t)) this.t[k] = [...(this.t[k] || [])];
+    this.ctx = ctx;
+  }
+  rows(table: string) { return (this.t[table] ||= []); }
+  find(table: string, id: any, what = table) {
+    const r = this.rows(table).find((x) => x.id === Number(id));
+    if (!r) throw new LocalError(404, `Not found in ${what}`);
+    return r;
+  }
+  /** A new row with every column the table has (null), like the server's RETURNING *. */
+  insert(table: string, fields: any) {
+    const tpl = this.rows(table)[0];
+    const cols = tpl ? Object.keys(tpl).filter((k) => !k.startsWith('_')) : COLUMNS[table] || [];
+    const row: any = { ...Object.fromEntries(cols.map((k) => [k, null])), ...fields, _key: String(fields.id), _pending: true };
+    if (cols.includes('created_at') && row.created_at == null) row.created_at = this.ctx.now;
+    this.rows(table).push(row);
+    return row;
+  }
+  /** Change a row in place (as a new object, so the device copy's own row is never touched). */
+  update(table: string, row: any, fields: any) {
+    const next = { ...row, ...fields, _pending: true };
+    const list = this.rows(table);
+    list[list.indexOf(row)] = next;
+    return next;
+  }
+  remove(table: string, pred: (r: any) => boolean) { this.t[table] = this.rows(table).filter((r) => !pred(r)); }
+  newId(given?: number | null) { return given ?? this.tmp--; }
+  data() { return new Data(this.t); }
+  settings() { return this.rows('shop_settings').find((s) => s.id === 1) || this.rows('shop_settings')[0] || {}; }
+
+  openBill(id: any) {
+    const b = this.find('bills', id, 'bills');
+    if (b.status !== 'open') refuse('This bill is closed. Reopen it to make changes.');
+    return b;
+  }
+  checkDay(bill: any, day: number) {
+    if (!(day >= 1 && day <= daysIn(bill.month))) refuse(`Day must be between 1 and ${daysIn(bill.month)}`);
+  }
+  ensureBill(supplierId: number, month: string, id?: number | null) {
+    const have = this.rows('bills').find((b) => b.supplier_id === supplierId && b.month === month);
+    if (have) return have;
+    const s = this.find('suppliers', supplierId, 'suppliers');
+    const prev = this.rows('bills').filter((b) => b.supplier_id === supplierId && b.month < month)
+      .sort((a, b) => byName(b.month, a.month))[0];
+    return this.insert('bills', { id: this.newId(id), supplier_id: supplierId, month, flower_id: s.flower_id,
+      commission_pct: s.commission_pct, opening_due: prev?.status === 'closed' && prev.carried ? -Number(prev.carried) : 0,
+      note: null, paper_totals: null, status: 'open' });
+  }
+  setDay(bill: any, day: number, weight: any, rate: any, note: any) {
+    this.remove('bill_days', (x) => x.bill_id === bill.id && x.day === day);
+    if (weight == null && rate == null && !note) return;
+    this.rows('bill_days').push({ _key: `${bill.id}:${day}`, bill_id: bill.id, day, weight: weight ?? null, rate: rate ?? null,
+      amount: dayAmount(weight, rate), note: note ?? null, updated_by: this.ctx.userId, _pending: true });
+  }
+  addKharcha(bill: any, day: number, amount: number, tag: any, note: any, clientId: any) {
+    if (clientId && this.rows('kharcha').some((k) => k.client_id === clientId)) return;
+    this.insert('kharcha', { id: this.tmp--, client_id: clientId ?? null, bill_id: bill.id, day, amount, tag: tag ?? null,
+      note: note ?? null, created_by: this.ctx.userId });
+  }
+  syncNextOpening(bill: any, carried: number | null) {
+    const nxt = this.rows('bills').filter((b) => b.supplier_id === bill.supplier_id && b.month > bill.month)
+      .sort((a, b) => byName(a.month, b.month))[0];
+    if (nxt && nxt.status === 'open') this.update('bills', nxt, { opening_due: -(carried || 0) });
+  }
+  uniqueName(table: string, name: string, skipId: number | null, msg: string) {
+    if (this.rows(table).some((r) => lower(r.name) === lower(name) && r.id !== skipId)) refuse(msg);
+  }
+
+  // PUT /daily/{date}, one row
+  daily(it: PendingItem) {
+    const r = it.row, date = it.date!, month = monthStart(date), day = Number(date.slice(8));
+    const touchesDay = 'weight' in r || 'rate' in r || 'note' in r;
+    const existing = this.rows('bills').find((b) => b.supplier_id === r.supplier_id && b.month === month);
+    if (!existing && r.weight == null && r.rate == null && !r.add_kharcha) return;
+    const bill = existing || this.ensureBill(r.supplier_id, month, it.temp_bill);
+    if (bill.status !== 'open') refuse('This month is closed for this supplier.');
+    if (touchesDay) this.setDay(bill, day, r.weight, r.rate, r.note);
+    if (r.add_kharcha) this.addKharcha(bill, day, r.add_kharcha, r.kharcha_tag, r.kharcha_note, r.kharcha_client_id);
+  }
+
+  kharchaDel(it: PendingItem) {
+    const k = this.rows('kharcha').find((x) => (it.id != null && x.id === it.id) || (it.client_id && x.client_id === it.client_id));
+    if (!k) return;
+    this.openBill(k.bill_id);
+    this.remove('kharcha', (x) => x === k);
+  }
+
+  request(it: PendingItem) {
+    const method = (it.method || 'POST').toUpperCase(), path = (it.path || '').split('?')[0], b = it.body || {};
+    let m: RegExpExecArray | null;
+    const is = (meth: string, re: RegExp) => method === meth && (m = re.exec(path));
+    const id = () => Number(m![1]);
+
+    if (is('PATCH', /^\/settings$/)) {
+      const s = this.settings();
+      return this.update('shop_settings', s, nonNull(b));
     }
+    if (is('POST', /^\/flowers$/)) {
+      this.uniqueName('flowers', b.name, null, 'That flower already exists');
+      return this.insert('flowers', { id: this.newId(it.temp_id), name: String(b.name).trim(), name_ur: b.name_ur ?? null, active: true });
+    }
+    if (is('PATCH', /^\/flowers\/(-?\d+)$/)) {
+      if (!b.name) refuse('The name is needed');
+      return this.update('flowers', this.find('flowers', id()), pick(nonNull(b), ['name', 'name_ur', 'active']));
+    }
+    if (is('POST', /^\/suppliers$/)) {
+      this.uniqueName('suppliers', b.name, null, 'A supplier with that name already exists');
+      const f: any = nonNull(pick(b, ['name', 'name_ur', 'phone', 'place', 'flower_id', 'commission_pct', 'notes', 'active']));
+      f.name = String(f.name).trim();
+      if (f.commission_pct == null) f.commission_pct = this.settings().default_commission_pct;
+      return this.insert('suppliers', { active: true, ...f, id: this.newId(it.temp_id) });
+    }
+    if (is('PATCH', /^\/suppliers\/(-?\d+)$/)) {
+      const s = this.find('suppliers', id());
+      const f: any = nonNull(pick(b, ['name', 'name_ur', 'phone', 'place', 'flower_id', 'commission_pct', 'notes', 'active']));
+      if (f.name) { f.name = String(f.name).trim(); this.uniqueName('suppliers', f.name, s.id, 'A supplier with that name already exists'); }
+      if (!Object.keys(f).length) refuse('Nothing to change');
+      return this.update('suppliers', s, f);
+    }
+    if (is('POST', /^\/suppliers\/(-?\d+)\/advances$/)) {
+      this.find('suppliers', id());
+      const signed = ['given', 'opening'].includes(b.kind) ? Number(b.amount) : -Number(b.amount);
+      return this.insert('advances', { id: this.newId(it.temp_id), supplier_id: id(), on_date: b.on_date, amount: signed,
+        kind: b.kind, bill_id: null, note: b.note ?? null, created_by: this.ctx.userId });
+    }
+    if (is('DELETE', /^\/advances\/(-?\d+)$/)) {
+      const a = this.find('advances', id());
+      if (a.kind === 'bill_cut') refuse('This was cut from a bill. Reopen that bill instead.');
+      if (a.kind === 'written_off') refuse('This was written off when the khaata was closed. Reopen the khaata instead.');
+      return this.remove('advances', (x) => x === a);
+    }
+    if (is('POST', /^\/suppliers\/(-?\d+)\/khaata\/close$/)) return this.khaataClose(id(), b, it);
+    if (is('POST', /^\/suppliers\/(-?\d+)\/khaata\/renew$/)) return this.khaataRenew(id(), b, it);
+    if (is('POST', /^\/suppliers\/(-?\d+)\/khaata\/reopen$/)) return this.khaataReopen(id());
+    if (is('POST', /^\/bills$/)) return this.ensureBill(Number(b.supplier_id), monthStart(b.month), it.temp_id);
+    if (is('POST', /^\/bills\/start-month$/)) {
+      const month = monthStart(b.month);
+      const have = new Set(this.rows('bills').filter((x) => x.month === month).map((x) => x.supplier_id));
+      for (const s of this.rows('suppliers')) {
+        if (s.active && !have.has(s.id) && it.temp_bills?.[String(s.id)] != null) this.ensureBill(s.id, month, it.temp_bills[String(s.id)]);
+      }
+      return;
+    }
+    if (is('PATCH', /^\/bills\/(-?\d+)$/)) {
+      const bill = this.openBill(id());
+      const f = pick(b, ['commission_pct', 'opening_due', 'flower_id', 'note']);
+      if (!Object.keys(f).length) refuse('Nothing to change');
+      return this.update('bills', bill, f);
+    }
+    if (is('POST', /^\/bills\/(-?\d+)\/kharcha$/)) {
+      const bill = this.openBill(id());
+      this.checkDay(bill, Number(b.day));
+      if (!Number(b.amount)) refuse('Amount cannot be zero');
+      return this.addKharcha(bill, Number(b.day), Number(b.amount), b.tag, b.note, b.client_id);
+    }
+    if (is('PUT', /^\/bills\/(-?\d+)\/days\/(\d+)$/)) {
+      const bill = this.openBill(id());
+      const day = Number(m![2]);
+      this.checkDay(bill, day);
+      return this.setDay(bill, day, b.weight, b.rate, b.note);
+    }
+    if (is('DELETE', /^\/kharcha\/(-?\d+)$/)) return this.kharchaDel({ kind: 'kharcha_del', id: id() });
+    if (is('DELETE', /^\/kharcha\/by-client\/(.+)$/)) return this.kharchaDel({ kind: 'kharcha_del', client_id: decodeURIComponent(m![1]) });
+    if (is('POST', /^\/bills\/(-?\d+)\/close$/)) return this.closeBill(id(), b);
+    if (is('POST', /^\/bills\/(-?\d+)\/reopen$/)) return this.reopenBill(id());
+    if (is('POST', /^\/investors$/)) {
+      this.uniqueName('investors', b.name, null, 'An investor with that name already exists');
+      return this.insert('investors', { active: true, ...nonNull(pick(b, ['name', 'phone', 'notes', 'active'])),
+        name: String(b.name).trim(), id: this.newId(it.temp_id) });
+    }
+    if (is('PATCH', /^\/investors\/(-?\d+)$/)) {
+      const f = pick(nonNull(b), ['name', 'phone', 'notes', 'active']);
+      if (!Object.keys(f).length) refuse('Nothing to change');
+      return this.update('investors', this.find('investors', id()), f);
+    }
+    if (is('POST', /^\/khaata-shares$/)) {
+      const f: any = pick(b, ['supplier_id', 'investor_id', 'pct', 'from_month', 'to_month', 'note']);
+      f.from_month = monthStart(f.from_month);
+      f.to_month = f.to_month ? monthStart(f.to_month) : null;
+      this.checkShare(f.supplier_id, f.investor_id, f.from_month, f.to_month, Number(f.pct), null);
+      return this.insert('khaata_shares', { ...f, id: this.newId(it.temp_id) });
+    }
+    if (is('PATCH', /^\/khaata-shares\/(-?\d+)$/)) {
+      const cur = this.find('khaata_shares', id());
+      const f: any = pick(b, ['pct', 'from_month', 'to_month', 'note']);
+      if ('from_month' in f) f.from_month = monthStart(f.from_month);
+      if ('to_month' in f) f.to_month = f.to_month ? monthStart(f.to_month) : null;
+      const lo = f.from_month ?? cur.from_month, hi = 'to_month' in f ? f.to_month : cur.to_month;
+      this.checkShare(cur.supplier_id, cur.investor_id, lo, hi, Number(f.pct ?? cur.pct), cur.id);
+      if (!Object.keys(f).length) refuse('Nothing to change');
+      return this.update('khaata_shares', cur, f);
+    }
+    if (is('DELETE', /^\/khaata-shares\/(-?\d+)$/)) {
+      const cur = this.find('khaata_shares', id());
+      return this.remove('khaata_shares', (x) => x === cur);
+    }
+    if (is('POST', /^\/investors\/(-?\d+)\/entries$/)) {
+      this.find('investors', id());
+      if (b.supplier_id) this.find('suppliers', b.supplier_id);
+      return this.insert('investor_entries', { kind: b.kind, amount: Number(b.amount), on_date: b.on_date,
+        supplier_id: b.supplier_id ?? null, note: b.note ?? null, investor_id: id(), created_by: this.ctx.userId,
+        id: this.newId(it.temp_id) });
+    }
+    if (is('DELETE', /^\/investor-entries\/(-?\d+)$/)) {
+      const e = this.find('investor_entries', id());
+      return this.remove('investor_entries', (x) => x === e);
+    }
+    throw new LocalError(501, `This change cannot be made without a connection (${method} ${path}).`);
+  }
+
+  checkShare(supplierId: number, investorId: number, lo: string, hi: string | null, pct: number, skipId: number | null) {
+    if (hi && hi < lo) refuse('The end month is before the start month');
+    const others = this.rows('khaata_shares').filter((s) => s.supplier_id === supplierId && s.id !== skipId);
+    const overlaps = (s: any) => s.from_month <= (hi || FAR) && (s.to_month || FAR) >= lo;
+    if (others.some((s) => s.investor_id === investorId && overlaps(s))) refuse('This investor already has a share in this khaata for some of those months');
+    // The busiest month in the range (up to five years) must stay at or under 100%.
+    let worst = 0;
+    let at = lo;
+    const end = [hi || FAR, `${Number(lo.slice(0, 4)) + 5}${lo.slice(4)}`].sort()[0];
+    for (let n = 0; at <= end && n < 61; n++) {
+      const tot = sum(others.filter((s) => s.from_month <= at && (s.to_month || FAR) >= at).map((s) => Number(s.pct)));
+      worst = Math.max(worst, tot);
+      const [y, mo] = at.split('-').map(Number);
+      at = mo === 12 ? `${y + 1}-01-01` : `${y}-${String(mo + 1).padStart(2, '0')}-01`;
+    }
+    if (worst + pct > 100) refuse(`Shares in this khaata would add up to more than 100% (${worst + pct}%)`);
+  }
+
+  closeBill(id: number, b: any) {
+    const bill = this.openBill(id);
+    const loaded = loadBill(this.data(), id);
+    const final = loaded.totals.final, cut = Number(b.advance_cut || 0), paid = Number(b.paid_cash || 0);
+    const out = loaded.advance_balance;
+    if (cut > 0 && cut > Math.max(0, Math.min(out, final))) {
+      if (out <= 0) refuse('Nothing can be cut: this supplier has no advance outstanding.');
+      if (final <= 0) refuse(`Nothing can be cut: this bill leaves nothing for the supplier (final Rs ${fmt(final)}).`);
+      if (cut > out) refuse(`Only Rs ${fmt(out)} is outstanding, so no more than that can be cut.`);
+      refuse(`This bill leaves Rs ${fmt(final)} for the supplier, so no more than that can be cut.`);
+    }
+    const carried = final - paid - cut;
+    const closed = this.update('bills', bill, { status: 'closed', paid_cash: paid, advance_cut: cut, carried,
+      closed_at: this.ctx.now, closed_by: this.ctx.userId, note: b.note ?? bill.note });
+    if (cut) {
+      this.insert('advances', { id: this.tmp--, supplier_id: bill.supplier_id, on_date: dateOf(bill.month, daysIn(bill.month)),
+        amount: -cut, kind: 'bill_cut', bill_id: id, created_by: this.ctx.userId, note: `From the ${MONTH_NAME(bill.month)} bill` });
+    }
+    this.syncNextOpening(closed, carried);
+  }
+
+  reopenBill(id: number) {
+    const bill = this.find('bills', id, 'bills');
+    if (bill.status !== 'closed') refuse('This bill is already open');
+    if (this.rows('bills').some((x) => x.supplier_id === bill.supplier_id && x.month > bill.month && x.status === 'closed')) {
+      refuse('A later month is already closed for this supplier. Reopen that first.');
+    }
+    this.remove('advances', (a) => a.bill_id === id && a.kind === 'bill_cut');
+    const open = this.update('bills', bill, { status: 'open', paid_cash: null, advance_cut: null, carried: null, closed_at: null, closed_by: null });
+    this.syncNextOpening(open, 0);
+  }
+
+  khaataClose(sid: number, b: any, it: PendingItem) {
+    this.find('suppliers', sid);
+    const info = khaataInfo(this.data(), sid);
+    if (info.status === 'closed') refuse('This khaata is already closed. Renew it to start a new one.');
+    const cur: any = info.current;
+    if (cur.opened_on && b.on_date < cur.opened_on) refuse(`The khaata was opened on ${cur.opened_on}; it cannot close before that.`);
+    const left = info.outstanding;
+    if (left && !b.write_off) refuse(`Rs ${fmt(left)} is still outstanding. Choose to write it off to close the khaata, or recover it first.`);
+    if (left) {
+      this.insert('advances', { id: this.tmp--, supplier_id: sid, on_date: b.on_date, amount: -left, kind: 'written_off',
+        bill_id: null, note: 'Written off when the khaata was closed' + (b.reason ? `: ${b.reason}` : ''), created_by: this.ctx.userId });
+    }
+    const month = monthStart(b.on_date);
+    const ended = this.rows('khaata_shares').filter((s) => s.supplier_id === sid && (s.to_month == null || s.to_month > month) && s.from_month <= month);
+    for (const s of ended) this.update('khaata_shares', s, { to_month: month });
+    const closing = { closed_on: b.on_date, close_reason: b.reason ?? null, written_off: left || null, closed_by: this.ctx.userId,
+      ended_shares: ended.map((s) => ({ id: s.id, to_month: s.to_month ?? null })) };
+    if (cur.id) this.update('khaatas', this.find('khaatas', cur.id), closing);
+    else {
+      const opened = cur.opened_on && cur.opened_on < b.on_date ? cur.opened_on : b.on_date;
+      this.insert('khaatas', { id: this.newId(it.temp_id), supplier_id: sid, opened_on: opened, terms: null, commission_pct: null,
+        created_by: null, ...closing });
+    }
+  }
+
+  khaataRenew(sid: number, b: any, it: PendingItem) {
+    this.find('suppliers', sid);
+    const info = khaataInfo(this.data(), sid);
+    if (info.status === 'open') refuse('The khaata is still open. Close it before starting a new one.');
+    if (b.on_date < (info.current as any).closed_on) refuse(`The last khaata closed on ${(info.current as any).closed_on}; the new one cannot start before that.`);
+    this.insert('khaatas', { id: this.newId(it.temp_id), supplier_id: sid, opened_on: b.on_date, terms: b.terms ?? null,
+      commission_pct: b.commission_pct ?? null, created_by: this.ctx.userId, closed_on: null, close_reason: null,
+      written_off: null, closed_by: null, ended_shares: null });
+    if (b.commission_pct != null) this.update('suppliers', this.find('suppliers', sid), { commission_pct: b.commission_pct });
+    if (b.advance) {
+      this.insert('advances', { id: this.tmp--, supplier_id: sid, on_date: b.on_date, amount: Number(b.advance), kind: 'given',
+        bill_id: null, note: 'Advance with the renewed khaata', created_by: this.ctx.userId });
+    }
+  }
+
+  khaataReopen(sid: number) {
+    this.find('suppliers', sid);
+    const info = khaataInfo(this.data(), sid);
+    if (info.status === 'open') refuse('The khaata is already open.');
+    const k = this.find('khaatas', (info.current as any).id);
+    this.remove('advances', (a) => a.supplier_id === sid && a.kind === 'written_off' && a.on_date === k.closed_on);
+    for (const sh of k.ended_shares || []) {
+      const s = this.rows('khaata_shares').find((x) => x.id === sh.id);
+      if (s) this.update('khaata_shares', s, { to_month: sh.to_month });
+    }
+    this.update('khaatas', k, { closed_on: null, close_reason: null, written_off: null, closed_by: null, ended_shares: null });
+  }
+
+  apply(it: PendingItem) {
+    if (it.kind === 'daily') return this.daily(it);
+    if (it.kind === 'kharcha_del') return this.kharchaDel(it);
+    return this.request(it);
+  }
+}
+
+/** The tables with this device's waiting saves put on top. With `strict`, a refusal of the LAST save is thrown
+ *  (used to check a new save before queueing it); refusals of earlier saves just leave them out. */
+export function applyPending(t: Tables, items: PendingItem[], ctx: Ctx = { userId: null, now: new Date().toISOString() },
+  strict = false): Tables {
+  if (!items.length) return t;
+  const w = new Writer(t, ctx);
+  items.forEach((it, i) => {
+    try {
+      w.apply(it);
+    } catch (e) {
+      if (strict && i === items.length - 1) throw e;
+    }
+  });
+  return w.t;
+}
+
+/** The row a waiting save made (by its temporary id), so it can be kept once the server gives the real id. */
+export function pendingRow(t: Tables, items: PendingItem[], table: string, tempId: number, ctx?: Ctx): any | null {
+  const after = applyPending(t, items, ctx);
+  return (after[table] || []).find((r) => r.id === tempId) ?? null;
+}
+
+// ---------- temporary ids for rows made on this device ----------
+
+/** The table a save makes a new row in (so it needs a temporary id until the server answers). */
+export function createdTable(method: string, path: string): string | null {
+  if (method.toUpperCase() !== 'POST') return null;
+  const p = path.split('?')[0];
+  if (p === '/suppliers') return 'suppliers';
+  if (p === '/flowers') return 'flowers';
+  if (p === '/investors') return 'investors';
+  if (p === '/bills') return 'bills';
+  if (p === '/khaata-shares') return 'khaata_shares';
+  if (/^\/investors\/-?\d+\/entries$/.test(p)) return 'investor_entries';
+  if (/^\/suppliers\/-?\d+\/advances$/.test(p)) return 'advances';
+  return null;
+}
+
+/** [table, temporary id, real id] for every row a save made, from the server's answer to it. */
+export function createdIds(it: PendingItem, res: any): [string, number, number][] {
+  const out: [string, number, number][] = [];
+  if (!res || typeof res !== 'object') return out;
+  if (it.kind === 'daily' && it.temp_bill != null) {
+    const real = res.bill_ids?.[String(it.row?.supplier_id)];
+    if (real != null) out.push(['bills', it.temp_bill, real]);
+  }
+  if (it.kind === 'request') {
+    const table = createdTable(it.method || '', it.path || '');
+    if (table && it.temp_id != null && res.id != null) out.push([table, it.temp_id, res.id]);
+    for (const b of res.bills || []) {
+      const temp = it.temp_bills?.[String(b.supplier_id)];
+      if (temp != null) out.push(['bills', temp, b.id]);
+    }
+  }
+  return out;
+}
+
+const REFS: Record<string, { seg: string; fields: string[] }> = {
+  suppliers: { seg: 'suppliers', fields: ['supplier_id'] },
+  investors: { seg: 'investors', fields: ['investor_id'] },
+  bills: { seg: 'bills', fields: ['bill_id'] },
+  flowers: { seg: 'flowers', fields: ['flower_id'] },
+  advances: { seg: 'advances', fields: [] },
+  khaata_shares: { seg: 'khaata-shares', fields: [] },
+  investor_entries: { seg: 'investor-entries', fields: [] },
+};
+
+/** A waiting save with a temporary id swapped for the real one (in its path, body and daily row). */
+export function remapItem<T extends PendingItem>(it: T, table: string, temp: number, real: number): T {
+  const r = REFS[table];
+  if (!r) return it;
+  const out: any = { ...it };
+  if (out.path) out.path = out.path.replace(new RegExp(`/${r.seg}/${temp}(?=/|$|[?])`), `/${r.seg}/${real}`);
+  for (const f of r.fields) {
+    if (out.body && out.body[f] === temp) out.body = { ...out.body, [f]: real };
+    if (out.row && out.row[f] === temp) out.row = { ...out.row, [f]: real };
   }
   return out;
 }

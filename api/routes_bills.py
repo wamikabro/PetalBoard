@@ -110,9 +110,8 @@ def start_month(body: dict, user: dict = Depends(require("manager"))):
         ids = [r["id"] for r in conn.execute(
             "SELECT id FROM suppliers WHERE active AND id NOT IN (SELECT supplier_id FROM bills WHERE month = %s)",
             (month,)).fetchall()]
-        for sid in ids:
-            ensure_bill(conn, sid, month)
-    return {"created": len(ids)}
+        made = [{"supplier_id": sid, "id": ensure_bill(conn, sid, month)["id"]} for sid in ids]
+    return {"created": len(ids), "bills": made}
 
 
 @router.get("/bills/{bill_id}")
@@ -386,7 +385,7 @@ class DailyIn(BaseModel):
 @router.put("/daily/{on_date}")
 def put_daily(on_date: date, body: DailyIn, user: dict = Depends(require("clerk"))):
     month = on_date.replace(day=1)
-    saved, skipped, conflicts = 0, [], []
+    saved, skipped, conflicts, bill_ids = 0, [], [], {}
     with db.transaction(user["id"]) as conn:
         for r in body.rows:
             existing = conn.execute("SELECT * FROM bills WHERE supplier_id = %s AND month = %s",
@@ -395,6 +394,7 @@ def put_daily(on_date: date, body: DailyIn, user: dict = Depends(require("clerk"
             if existing is None and nothing:
                 continue
             bill = existing or ensure_bill(conn, r.supplier_id, month)
+            bill_ids[str(r.supplier_id)] = bill["id"]
             if bill["status"] != "open":
                 skipped.append(r.supplier_id)
                 continue
@@ -421,4 +421,4 @@ def put_daily(on_date: date, body: DailyIn, user: dict = Depends(require("clerk"
                                              "tag": r.kharcha_tag, "note": r.kharcha_note, "created_by": user["id"],
                                              "client_id": r.kharcha_client_id})
             saved += 1
-    return {"saved": saved, "skipped_closed": skipped, "conflicts": conflicts}
+    return {"saved": saved, "skipped_closed": skipped, "conflicts": conflicts, "bill_ids": bill_ids}
