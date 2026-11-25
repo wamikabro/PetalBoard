@@ -83,6 +83,9 @@ const byName = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 // ---------- the data, indexed ----------
 
+/** Kharcha in the order they were added; ones still waiting on this device (negative ids) come last. */
+const khOrder = (k: any) => (k._pending ? 1e15 - k.id : k.id);
+
 class Data {
   suppliers = new Map<number, any>();
   flowers = new Map<number, any>();
@@ -98,7 +101,7 @@ class Data {
     for (const d of t.bill_days || []) push(this.days, d.bill_id, d);
     for (const k of t.kharcha || []) push(this.kharcha, k.bill_id, k);
     for (const v of this.days.values()) v.sort((a, b) => a.day - b.day);
-    for (const v of this.kharcha.values()) v.sort((a, b) => a.day - b.day || a.id - b.id);
+    for (const v of this.kharcha.values()) v.sort((a, b) => a.day - b.day || khOrder(a) - khOrder(b));
   }
   supplierName(b: any) { return this.suppliers.get(b.supplier_id)?.name ?? ''; }
   /** Bills sorted like "ORDER BY b.month DESC, s.name". */
@@ -112,6 +115,14 @@ function push<K, V>(m: Map<K, V[]>, k: K, v: V) {
 }
 
 // ---------- bills ----------
+
+/** A kharcha as the server sends it; `pending` = still waiting on this device to be sent. */
+function khItem(k: any) {
+  const out: any = { id: k.id, client_id: k.client_id ?? null, amount: Number(k.amount), tag: k.tag, note: k.note };
+  if (k._pending) out.pending = true;
+  return out;
+}
+
 
 function advanceBalance(d: Data, supplierId: number, upto?: string): number {
   return sum((d.t.advances || []).filter((a) => a.supplier_id === supplierId && (!upto || a.on_date <= upto))
@@ -128,7 +139,7 @@ function loadBill(d: Data, id: number) {
   const n = daysIn(bill.month);
   const byDay = new Map(days.map((x) => [x.day, x]));
   const khByDay = new Map<number, any[]>();
-  for (const k of kh) push(khByDay, k.day, { id: k.id, amount: Number(k.amount), tag: k.tag, note: k.note });
+  for (const k of kh) push(khByDay, k.day, khItem(k));
 
   const rows: any[] = [], warnings: string[] = [];
   for (let day = 1; day <= n; day++) {
@@ -241,9 +252,10 @@ function daily(d: Data, onDate: string) {
         supplier_id: s.id, supplier_name: s.name, flower_name: s.flower_id != null ? d.flowers.get(s.flower_id)?.name ?? null : null,
         bill_id: b ? b.id : null, bill_status: b ? b.status : null,
         weight: x ? num(x.weight) : null, rate: x ? num(x.rate) : null, amount: x ? Number(x.amount) : null, note: x ? x.note : null,
-        kharcha: b ? (d.kharcha.get(b.id) || []).filter((k) => k.day === day).sort((p, q) => p.id - q.id)
-          .map((k) => ({ id: k.id, amount: Number(k.amount), tag: k.tag, note: k.note })) : [],
+        kharcha: b ? (d.kharcha.get(b.id) || []).filter((k) => k.day === day).sort((p, q) => khOrder(p) - khOrder(q))
+          .map(khItem) : [],
         last_rate: last.get(s.id)?.rate ?? null,
+        ...(x?._pending ? { pending: true } : {}),
       };
     }),
   };
@@ -415,4 +427,47 @@ export function localAnswer(path: string, t: Tables): any {
   if (p === '/reports/balances') return balances(d());
   if (p === '/flowers') return [...t.flowers].sort((a, b) => Number(b.active) - Number(a.active) || byName(a.name, b.name)).map(({ _key, ...row }: any) => row);
   return undefined;
+}
+
+// ---------- changes still waiting on this device (outbox) ----------
+
+/** The tables with this device's unsent changes put on top, worked out the way the server will
+ *  (api/routes_bills.py put_daily, delete_kharcha). Pending rows are marked `_pending`. */
+export function applyPending(t: Tables, items: any[]): Tables {
+  if (!items.length) return t;
+  const out: Tables = { ...t, bills: [...(t.bills || [])], bill_days: [...(t.bill_days || [])], kharcha: [...(t.kharcha || [])] };
+  let tmp = -1;
+  for (const it of items) {
+    if (it.kind === 'daily') {
+      const r = it.row, month = monthStart(it.date), day = Number(it.date.slice(8));
+      const touchesDay = 'weight' in r || 'rate' in r || 'note' in r;
+      let bill = out.bills.find((b) => b.supplier_id === r.supplier_id && b.month === month);
+      if (!bill) {
+        const s = (t.suppliers || []).find((x) => x.id === r.supplier_id);
+        if (!s || (r.weight == null && r.rate == null && !r.add_kharcha)) continue;
+        const prev = out.bills.filter((b) => b.supplier_id === s.id && b.month < month).sort((a, b) => byName(b.month, a.month))[0];
+        const template = Object.fromEntries(Object.keys(out.bills[0] || {}).map((k) => [k, null]));
+        bill = { ...template, id: tmp--, _key: `pending-bill-${s.id}-${month}`, supplier_id: s.id, month, flower_id: s.flower_id,
+          commission_pct: s.commission_pct, opening_due: prev?.status === 'closed' && prev.carried ? -Number(prev.carried) : 0,
+          note: null, paper_totals: null, status: 'open', _pending: true };
+        out.bills.push(bill);
+      }
+      if (bill.status !== 'open') continue;
+      if (touchesDay) {
+        const at = out.bill_days.findIndex((x) => x.bill_id === bill.id && x.day === day);
+        if (at >= 0) out.bill_days.splice(at, 1);
+        if (!(r.weight == null && r.rate == null && !r.note)) {
+          out.bill_days.push({ _key: `${bill.id}:${day}`, bill_id: bill.id, day, weight: r.weight ?? null, rate: r.rate ?? null,
+            amount: dayAmount(r.weight, r.rate), note: r.note ?? null, _pending: true });
+        }
+      }
+      if (r.add_kharcha && !(r.kharcha_client_id && out.kharcha.some((k) => k.client_id === r.kharcha_client_id))) {
+        out.kharcha.push({ _key: `pending-${r.kharcha_client_id}`, id: tmp--, client_id: r.kharcha_client_id ?? null, bill_id: bill.id, day,
+          amount: r.add_kharcha, tag: r.kharcha_tag ?? null, note: r.kharcha_note ?? null, _pending: true });
+      }
+    } else if (it.kind === 'kharcha_del') {
+      out.kharcha = out.kharcha.filter((k) => !((it.id != null && k.id === it.id) || (it.client_id && k.client_id === it.client_id)));
+    }
+  }
+  return out;
 }

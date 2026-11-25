@@ -1,6 +1,6 @@
 """Monthly bills, their days and kharcha, closing a month, and the daily entry screen."""
 
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -48,7 +48,7 @@ def ensure_bill(conn, supplier_id: int, month: date) -> dict:
     })
 
 
-def set_day(conn, bill: dict, day: int, weight, rate, amount, note, user_id: int) -> None:
+def set_day(conn, bill: dict, day: int, weight, rate, amount, note, user_id: int, made_at: datetime | None = None) -> None:
     """Write one day's weight and rate. Empty weight, rate and amount removes the day."""
     if weight is None and rate is None and amount is None and not note:
         conn.execute("DELETE FROM bill_days WHERE bill_id = %s AND day = %s", (bill["id"], day))
@@ -57,11 +57,13 @@ def set_day(conn, bill: dict, day: int, weight, rate, amount, note, user_id: int
         amount = day_amount(weight, rate)
     conn.execute(
         """
-        INSERT INTO bill_days (bill_id, day, weight, rate, amount, note, updated_by) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO bill_days (bill_id, day, weight, rate, amount, note, updated_by, made_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, LEAST(COALESCE(%s::timestamptz, now()), now()))
         ON CONFLICT (bill_id, day) DO UPDATE SET weight = EXCLUDED.weight, rate = EXCLUDED.rate,
-            amount = EXCLUDED.amount, note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now()
+            amount = EXCLUDED.amount, note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now(),
+            made_at = EXCLUDED.made_at
         """,
-        (bill["id"], day, weight, rate, amount, note, user_id),
+        (bill["id"], day, weight, rate, amount, note, user_id, made_at),
     )
 
 
@@ -181,6 +183,11 @@ class KharchaIn(BaseModel):
     amount: int = Field(description="Negative only to correct an earlier entry")
     tag: str | None = Field(default=None, max_length=8)
     note: str | None = None
+    client_id: str | None = Field(default=None, max_length=64, description="Made by the device; the same id is saved once")
+
+
+def kharcha_exists(conn, client_id: str | None) -> bool:
+    return bool(client_id) and conn.execute("SELECT 1 FROM kharcha WHERE client_id = %s", (client_id,)).fetchone() is not None
 
 
 @router.post("/bills/{bill_id}/kharcha")
@@ -190,8 +197,9 @@ def add_kharcha(bill_id: int, body: KharchaIn, user: dict = Depends(require("cle
     with db.transaction(user["id"]) as conn:
         bill = _open_bill(conn, bill_id)
         _check_day(bill, body.day)
-        insert_row(conn, "kharcha", {"bill_id": bill_id, "day": body.day, "amount": body.amount, "tag": body.tag,
-                                     "note": body.note, "created_by": user["id"]})
+        if not kharcha_exists(conn, body.client_id):
+            insert_row(conn, "kharcha", {"bill_id": bill_id, "day": body.day, "amount": body.amount, "tag": body.tag,
+                                         "note": body.note, "created_by": user["id"], "client_id": body.client_id})
         return load_bill(conn, bill_id)
 
 
@@ -201,6 +209,18 @@ def delete_kharcha(kharcha_id: int, user: dict = Depends(require("clerk"))):
         k = get_or_404(conn, "kharcha", kharcha_id)
         _open_bill(conn, k["bill_id"])
         conn.execute("DELETE FROM kharcha WHERE id = %s", (kharcha_id,))
+        return load_bill(conn, k["bill_id"])
+
+
+@router.delete("/kharcha/by-client/{client_id}")
+def delete_kharcha_by_client(client_id: str, user: dict = Depends(require("clerk"))):
+    """Remove a kharcha by the id the device gave it (it may not know the server's id yet)."""
+    with db.transaction(user["id"]) as conn:
+        k = conn.execute("SELECT * FROM kharcha WHERE client_id = %s", (client_id,)).fetchone()
+        if not k:
+            raise HTTPException(404, "Kharcha not found")
+        _open_bill(conn, k["bill_id"])
+        conn.execute("DELETE FROM kharcha WHERE id = %s", (k["id"],))
         return load_bill(conn, k["bill_id"])
 
 
@@ -305,7 +325,8 @@ def get_daily(on_date: date, user: dict = Depends(current_user)):
         for r in conn.execute(
                 "SELECT k.* FROM kharcha k JOIN bills b ON b.id = k.bill_id WHERE b.month = %s AND k.day = %s ORDER BY k.id",
                 (month, on_date.day)).fetchall():
-            kh.setdefault(r["bill_id"], []).append({"id": r["id"], "amount": int(r["amount"]), "tag": r["tag"], "note": r["note"]})
+            kh.setdefault(r["bill_id"], []).append({"id": r["id"], "client_id": r["client_id"], "amount": int(r["amount"]),
+                                                   "tag": r["tag"], "note": r["note"]})
         # Yesterday's rate per supplier, to fill in quickly.
         prev = {r["supplier_id"]: as_num(r["rate"]) for r in conn.execute(
             """
@@ -328,7 +349,13 @@ def get_daily(on_date: date, user: dict = Depends(current_user)):
     return {"date": on_date.isoformat(), "rows": rows}
 
 
+class DayValues(BaseModel):
+    weight: float | None = None
+    rate: float | None = None
+
+
 class DailyRow(BaseModel):
+    """One supplier's day. Leave out weight, rate and note (the keys) to only add a kharcha."""
     supplier_id: int
     weight: float | None = Field(default=None, ge=0)
     rate: float | None = Field(default=None, ge=0)
@@ -336,6 +363,20 @@ class DailyRow(BaseModel):
     add_kharcha: int | None = None
     kharcha_tag: str | None = Field(default=None, max_length=8)
     kharcha_note: str | None = None
+    kharcha_client_id: str | None = Field(default=None, max_length=64)
+    # From a phone's outbox: when the change was made, and the weight/rate the phone showed before it.
+    made_at: datetime | None = None
+    base: DayValues | None = None
+
+
+def _same(a, b, places: int) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    return round(float(a), places) == round(float(b), places)
+
+
+def _same_day(cur, weight, rate) -> bool:
+    return _same(cur["weight"] if cur else None, weight, 3) and _same(cur["rate"] if cur else None, rate, 2)
 
 
 class DailyIn(BaseModel):
@@ -345,7 +386,7 @@ class DailyIn(BaseModel):
 @router.put("/daily/{on_date}")
 def put_daily(on_date: date, body: DailyIn, user: dict = Depends(require("clerk"))):
     month = on_date.replace(day=1)
-    saved, skipped = 0, []
+    saved, skipped, conflicts = 0, [], []
     with db.transaction(user["id"]) as conn:
         for r in body.rows:
             existing = conn.execute("SELECT * FROM bills WHERE supplier_id = %s AND month = %s",
@@ -357,9 +398,27 @@ def put_daily(on_date: date, body: DailyIn, user: dict = Depends(require("clerk"
             if bill["status"] != "open":
                 skipped.append(r.supplier_id)
                 continue
-            set_day(conn, bill, on_date.day, r.weight, r.rate, None, r.note, user["id"])
-            if r.add_kharcha:
+            if r.model_fields_set & {"weight", "rate", "note"}:
+                cur = conn.execute(
+                    """SELECT d.weight, d.rate, d.note, COALESCE(d.made_at, d.updated_at) AS made_at, u.display_name AS by_name
+                       FROM bill_days d LEFT JOIN users u ON u.id = d.updated_by WHERE d.bill_id = %s AND d.day = %s""",
+                    (bill["id"], on_date.day)).fetchone()
+                theirs = {"weight": as_num(cur["weight"]), "rate": as_num(cur["rate"]),
+                          "by": cur["by_name"], "at": cur["made_at"].isoformat()} if cur else None
+                change = None
+                if not _same_day(cur, r.weight, r.rate):
+                    if cur and r.made_at and cur["made_at"] > r.made_at:
+                        change = "kept_newer"     # changed on the server after this change was made: the later one wins
+                    elif r.base is not None and not _same_day(cur, r.base.weight, r.base.rate):
+                        change = "replaced"       # changed by someone else in between, but earlier than this change
+                if change:
+                    conflicts.append({"supplier_id": r.supplier_id, "date": on_date.isoformat(), "what": change,
+                                      "yours": {"weight": r.weight, "rate": r.rate}, "theirs": theirs})
+                if change != "kept_newer":
+                    set_day(conn, bill, on_date.day, r.weight, r.rate, None, r.note, user["id"], r.made_at)
+            if r.add_kharcha and not kharcha_exists(conn, r.kharcha_client_id):
                 insert_row(conn, "kharcha", {"bill_id": bill["id"], "day": on_date.day, "amount": r.add_kharcha,
-                                             "tag": r.kharcha_tag, "note": r.kharcha_note, "created_by": user["id"]})
+                                             "tag": r.kharcha_tag, "note": r.kharcha_note, "created_by": user["id"],
+                                             "client_id": r.kharcha_client_id})
             saved += 1
-    return {"saved": saved, "skipped_closed": skipped}
+    return {"saved": saved, "skipped_closed": skipped, "conflicts": conflicts}

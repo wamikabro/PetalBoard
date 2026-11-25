@@ -33,6 +33,17 @@ import App from '../layouts/App.astro';
       </div>
     </section>
 
+    <section class="card card-pad space-y-3" id="sync">
+      <div>
+        <h2 class="font-semibold">Changes made on this device</h2>
+        <p class="text-sm text-muted">Daily entries and kharcha typed with no connection wait here and are sent by themselves when the connection is back (open the app to send them on iPhone).
+          If two phones changed the same day, the change made later is kept and the other is listed below to check.</p>
+      </div>
+      <div id="outbox-status" class="text-sm"></div>
+      <div class="flex flex-wrap gap-2"><button class="btn-ghost" id="outbox-send">Send now</button></div>
+      <div id="problems"></div>
+    </section>
+
     <section class="card card-pad space-y-3 hidden" id="restore-card">
       <div>
         <h2 class="font-semibold">Restore a new server</h2>
@@ -83,7 +94,40 @@ import App from '../layouts/App.astro';
   import { api, API_URL, can, getToken, getUser } from '../lib/api';
   import { esc } from '../lib/format';
   import { busy, dialog, download, toast } from '../lib/ui';
-  import { deviceCopy, getState, syncNow, type SyncState } from '../lib/offline';
+  import { deviceCopy, getState, outboxItems, problemDelete, problemsAll, syncNow, type SyncState } from '../lib/offline';
+  import { flush, outboxStatus } from '../lib/outbox';
+
+  // ---- changes made on this device: waiting, and problems to check ----
+  const fmtTime = (t: number) => new Date(t).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const dayVals = (v: any) => (v ? `${v.weight ?? '—'} kg × ${v.rate ?? '—'}` : 'empty');
+  function problemText(p: any): string {
+    if (p.what === 'kept_newer') return `Not saved: ${esc(p.theirs?.by || 'someone')} changed this day later (${fmtTime(Date.parse(p.theirs?.at))}) to ${dayVals(p.theirs)}. This device had ${dayVals(p.yours)}.`;
+    if (p.what === 'replaced') return `Saved ${dayVals(p.yours)}, replacing ${dayVals(p.theirs)} entered by ${esc(p.theirs?.by || 'someone')}.`;
+    return `Not saved: ${esc(p.message || 'the server refused it')}`;
+  }
+  async function showOutbox() {
+    const waiting = await outboxItems(), problems = await problemsAll();
+    document.getElementById('outbox-status')!.innerHTML = waiting.length
+      ? `<p class="text-warn font-medium">${waiting.length} change${waiting.length > 1 ? 's' : ''} waiting to be sent</p>
+         <ul class="mt-1 text-muted list-disc pl-5">${waiting.slice(0, 20).map((w: any) => `<li>${esc(w.label || w.kind)}</li>`).join('')}</ul>`
+      : '<p class="text-muted">Nothing waiting: every change made here has reached the server.</p>';
+    document.getElementById('problems')!.innerHTML = problems.length ? `
+      <h3 class="font-semibold text-bad">Sync problems to check (${problems.length})</h3>
+      <ul class="mt-2 divide-y divide-line">${problems.sort((a: any, b: any) => b.at - a.at).map((p: any) => `
+        <li class="py-2 flex items-start gap-3">
+          <div class="flex-1 min-w-0 text-sm"><p class="font-medium">${esc(p.label || '')}</p><p class="text-muted">${problemText(p)}</p>
+            <p class="text-xs text-faint">${fmtTime(p.at)}${p.date && p.supplier_id ? ` · <a class="text-brand" href="/daily?date=${p.date}">open that day</a>` : ''}</p></div>
+          <button class="btn-ghost !py-1 text-xs" data-problem="${p.id}">Checked</button>
+        </li>`).join('')}</ul>` : '';
+  }
+  showOutbox();
+  window.addEventListener('petalboard:outbox', () => showOutbox());
+  document.getElementById('sync')!.addEventListener('click', async (e) => {
+    const b = (e.target as HTMLElement).closest('button');
+    if (!b) return;
+    if (b.id === 'outbox-send') await busy(b, async () => { const st = await flush(); toast(st.waiting ? 'No connection: still waiting' : 'All sent', st.waiting ? 'error' : 'ok'); });
+    if (b.dataset.problem) { await problemDelete(Number(b.dataset.problem)); outboxStatus(); }
+  });
 
   // ---- data on this device ----
   function showDevice(st: SyncState) {

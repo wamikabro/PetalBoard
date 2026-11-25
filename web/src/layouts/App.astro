@@ -66,6 +66,7 @@ const nav = [
               </a>
             ))}
           </nav>
+          <div class="px-3 pb-2"><a href="/settings#sync" data-outbox class="hidden chip whitespace-nowrap" title="Changes on this device"></a></div>
           <div class="p-3 border-t border-line">
             <div class="flex items-center gap-2 px-2">
               <div class="w-8 h-8 rounded-full bg-brand-soft text-brand grid place-items-center text-sm font-semibold" data-user-initial>·</div>
@@ -85,6 +86,7 @@ const nav = [
           <header class="no-print lg:hidden sticky top-0 z-30 bg-panel/90 backdrop-blur border-b border-line h-14 flex items-center justify-between px-4">
             <a href="/" class="flex items-center gap-2"><img src="/favicon.svg" alt="" class="w-7 h-7" /><span class="font-semibold">PetalBoard</span></a>
             <div class="flex items-center gap-1">
+              <a href="/settings#sync" data-outbox class="hidden chip whitespace-nowrap" title="Changes on this device"></a>
               <button class="btn-ghost !px-2 !py-1.5" data-theme-toggle aria-label="Switch light or dark">
                 <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" /></svg>
               </button>
@@ -121,15 +123,35 @@ const nav = [
     <script>
       import { api, clearLogin, getUser, getToken } from '../lib/api';
       import { startSync } from '../lib/offline';
-      // Keep a copy of all data on this device (safe if the server is lost; pages work offline).
-      if (getToken()) startSync();
+      import { outboxStatus, startOutbox, type OutboxStatus } from '../lib/outbox';
+      // Keep a copy of all data on this device (safe if the server is lost; pages work offline),
+      // and send changes made here without a connection once it is back.
+      if (getToken()) { startSync(); startOutbox(); }
+      let savedTimer: any = null;
+      function showOutbox(st: OutboxStatus, justSent = false) {
+        const offline = document.documentElement.classList.contains('is-offline');
+        let text = '', cls = '';
+        if (st.waiting) { text = st.sending ? `Sending ${st.waiting}…` : `${offline ? 'Offline · ' : ''}${st.waiting} change${st.waiting > 1 ? 's' : ''} waiting`; cls = 'bg-warn/10 text-warn'; }
+        else if (st.problems) { text = `${st.problems} to check`; cls = 'bg-bad/10 text-bad'; }
+        else if (justSent) { text = 'All saved'; cls = 'bg-good/10 text-good'; }
+        document.querySelectorAll<HTMLElement>('[data-outbox]').forEach((a) => {
+          a.textContent = text;
+          a.className = `chip whitespace-nowrap ${cls} ${text ? '' : 'hidden'}`;
+          a.title = st.problems ? 'Some changes need checking: see Settings → Sync problems' : 'Changes made on this device';
+        });
+        clearTimeout(savedTimer);
+        if (justSent && !st.waiting && !st.problems) savedTimer = setTimeout(() => showOutbox(st), 4000);
+      }
+      window.addEventListener('petalboard:outbox', (e) => showOutbox((e as CustomEvent).detail));
+      window.addEventListener('petalboard:outbox-sent', () => outboxStatus().then((st) => showOutbox(st, true)));
+      if (getToken()) outboxStatus();
       const banner = document.getElementById('offline-banner')!;
       window.addEventListener('petalboard:offline', (e: Event) => {
         const at = new Date((e as CustomEvent).detail.at);
         const when = at.toDateString() === new Date().toDateString()
           ? at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
           : at.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-        banner.textContent = `No connection to the server · showing data saved on this device at ${when} · changes cannot be saved yet`;
+        banner.textContent = `No connection to the server · showing data saved on this device at ${when} · daily entries and kharcha are kept here and sent when it is back`;
         banner.classList.remove('hidden');
         document.documentElement.classList.add('is-offline');
       });

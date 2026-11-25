@@ -94,3 +94,12 @@ def migrate(url: str | None = None) -> None:
             with conn.transaction():  # each step all or nothing
                 conn.execute(MIGRATIONS[v])
                 conn.execute("UPDATE schema_meta SET version = %s", (v,))
+
+# A phone's offline outbox sends each kharcha with its own id, so a kharcha sent twice is saved once.
+MIGRATIONS[4] = """
+    ALTER TABLE kharcha ADD COLUMN client_id text;
+    CREATE UNIQUE INDEX kharcha_client ON kharcha(client_id) WHERE client_id IS NOT NULL;
+    -- When the change to a day was made (on a phone it can be hours before it reaches the server).
+    -- Two changes to one day: the one made later wins.
+    ALTER TABLE bill_days ADD COLUMN made_at timestamptz;
+"""

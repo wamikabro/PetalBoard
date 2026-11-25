@@ -102,14 +102,15 @@ def load_bill(conn, bill_id: int) -> dict:
         "SELECT day, weight, rate, amount, note FROM bill_days WHERE bill_id = %s ORDER BY day", (bill_id,)
     ).fetchall()
     kh = conn.execute(
-        "SELECT id, day, amount, tag, note FROM kharcha WHERE bill_id = %s ORDER BY day, id", (bill_id,)
+        "SELECT id, client_id, day, amount, tag, note FROM kharcha WHERE bill_id = %s ORDER BY day, id", (bill_id,)
     ).fetchall()
 
     n_days = days_in(bill["month"])
     by_day = {d["day"]: d for d in days}
     kh_by_day: dict[int, list] = {}
     for k in kh:
-        kh_by_day.setdefault(k["day"], []).append({"id": k["id"], "amount": int(k["amount"]), "tag": k["tag"], "note": k["note"]})
+        kh_by_day.setdefault(k["day"], []).append({"id": k["id"], "client_id": k["client_id"], "amount": int(k["amount"]),
+                                                  "tag": k["tag"], "note": k["note"]})
 
     rows, warnings = [], []
     for day in range(1, n_days + 1):

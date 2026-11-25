@@ -4,6 +4,7 @@ const PRODUCTION_API = 'https://api.129.213.60.139.sslip.io';
 export const API_URL: string = (import.meta.env.PUBLIC_API_URL || PRODUCTION_API).replace(/\/$/, '');
 
 import { deviceAnswer, saveResponse } from './offline';
+import { flush, hasWaiting } from './outbox';
 
 const TOKEN_KEY = 'petalboard_token';
 const USER_KEY = 'petalboard_user';
@@ -67,6 +68,12 @@ export async function api<T = any>(
     window.dispatchEvent(new CustomEvent('petalboard:offline', { detail: { at: saved.at } }));
     return saved.data as T;
   };
+  // Changes made on this device still waiting: send them first, so the answer includes them.
+  // If they cannot go yet, answer from this device (it shows them on top of the saved data).
+  if (keep && (await hasWaiting())) {
+    const st = await flush();
+    if (st.waiting) return fromDevice('Changes are waiting to be sent.');
+  }
   let res: Response;
   try {
     res = await send();

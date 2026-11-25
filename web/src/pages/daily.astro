@@ -81,13 +81,16 @@ import App from '../layouts/App.astro';
   import { api, can } from '../lib/api';
   import { esc, kg, num, prettyDate, rs, shiftDay, today } from '../lib/format';
   import { busy, dialog, qp, setQuery, toast } from '../lib/ui';
+  import { newId, outboxStatus, submit, type DailyRow } from '../lib/outbox';
 
-  type K = { id: number; amount: number; tag: string | null; note: string | null };
+  /** id is null (or below 0) until the server has it; client_id is the device's own id for it. pending = waiting on this device. */
+  type K = { id: number | null; client_id?: string | null; amount: number; tag: string | null; note: string | null; pending?: boolean };
   type Row = {
     supplier_id: number; supplier_name: string; flower_name: string | null; bill_id: number | null;
     bill_status: string | null; weight: number | null; rate: number | null; amount: number | null;
     note: string | null; kharcha: K[]; last_rate: number | null;
-    _state?: 'saved' | 'dirty' | 'saving' | 'error';
+    pending?: boolean; // the day's weight/rate is waiting on this device to be sent
+    _state?: 'saved' | 'dirty' | 'saving' | 'error' | 'waiting';
     _orig?: number | null; // weight as last saved
     _origRate?: number | null; // rate as last saved
     _ver?: number; // bumped on every keystroke, so a slow save does not mark newer typing as saved
@@ -121,13 +124,17 @@ import App from '../layouts/App.astro';
       t('Kharcha given', rs(k));
   }
 
+  const WAITING = '<span class="text-xs text-warn" title="Kept on this device; sent when the connection is back">Waiting</span>';
   function stateDot(r: Row) {
     if (r.bill_status === 'closed') return '<span class="chip bg-sunken text-muted" title="This month is closed">Locked</span>';
     switch (r._state) {
       case 'saving': return '<span class="text-xs text-muted">Saving…</span>';
       case 'dirty': return '<span class="text-xs text-warn">Not saved</span>';
       case 'error': return '<span class="text-xs text-bad">Error</span>';
-      default: return r.weight || r.kharcha.length ? '<span class="text-xs text-good">✓ Saved</span>' : '';
+      case 'waiting': return WAITING;
+      default:
+        if (r.pending || r.kharcha.some((k) => k.pending)) return WAITING;
+        return r.weight || r.kharcha.length ? '<span class="text-xs text-good">✓ Saved</span>' : '';
     }
   }
 
@@ -135,9 +142,9 @@ import App from '../layouts/App.astro';
 
   function chipsHtml(r: Row) {
     const locked = isLocked(r);
-    const kh = r.kharcha.map((k) => `
-      <span class="chip bg-brand-soft text-brand">${num(k.amount)}${k.tag ? `<sup>${esc(k.tag)}</sup>` : ''}${k.note ? ` · ${esc(k.note)}` : ''}
-        ${locked ? '' : `<button data-del-k="${k.id}" class="ml-0.5 -mr-1 px-1 rounded hover:bg-brand/20" aria-label="Remove ${num(k.amount)}">×</button>`}
+    const kh = r.kharcha.map((k, j) => `
+      <span class="chip bg-brand-soft text-brand ${k.pending ? 'opacity-60' : ''}" ${k.pending ? 'title="Waiting to be sent"' : ''}>${num(k.amount)}${k.tag ? `<sup>${esc(k.tag)}</sup>` : ''}${k.note ? ` · ${esc(k.note)}` : ''}
+        ${locked ? '' : `<button data-del-k="${j}" class="ml-0.5 -mr-1 px-1 rounded hover:bg-brand/20" aria-label="Remove ${num(k.amount)}">×</button>`}
       </span>`).join('');
     const pend = (r._pending || []).map((k) =>
       `<span class="chip bg-brand-soft text-brand opacity-50">${num(k.amount)}${k.tag ? `<sup>${esc(k.tag)}</sup>` : ''}</span>`).join('');
@@ -233,25 +240,42 @@ import App from '../layouts/App.astro';
     if (kharcha) r._pending = [...(r._pending || []), { key, ...kharcha }];
     if (ready) r._state = 'saving';
     refreshRow(i);
+    const date = current;
     const job = async () => {
+      // A kharcha on its own (day not changed, or weight typed but no rate yet) leaves the day's weight and rate
+      // out, so it can never overwrite what another phone entered for that day.
+      const base = { weight: r._orig ?? null, rate: r._origRate ?? null };
+      const dayChanged = !(weight === base.weight && rate === base.rate);
+      const sendDay = ready && (dayChanged || !kharcha);
+      const row: DailyRow = { supplier_id: r.supplier_id };
+      if (sendDay) Object.assign(row, { weight, rate, note: r.note, base });
+      const clientId = kharcha ? newId() : null;
+      if (kharcha) Object.assign(row, { add_kharcha: kharcha.amount, kharcha_tag: kharcha.tag, kharcha_client_id: clientId });
+      const what = [sendDay ? (weight != null ? `${weight} kg × ${rate ?? '?'}` : 'day cleared') : '',
+        kharcha ? `kharcha ${kharcha.amount}${kharcha.tag || ''}` : ''].filter(Boolean).join(', ');
       try {
-        await api(`/daily/${current}`, { method: 'PUT', body: { rows: [{
-          supplier_id: r.supplier_id, weight, rate, note: r.note,
-          add_kharcha: kharcha?.amount ?? null, kharcha_tag: kharcha?.tag ?? null,
-        }] } });
-        r._orig = weight;
-        r._origRate = rate;
+        const { queued, result } = await submit({ kind: 'daily', date, row, label: `${r.supplier_name} · ${prettyDate(date)}: ${what}` });
+        if (date !== current) return; // the page moved to another day meanwhile
+        if (sendDay) { r._orig = weight; r._origRate = rate; }
         if (kharcha) {
-          // Fetch the day again so the new kharcha chip gets its id (needed to remove it).
-          const d = await api(`/daily/${current}`);
-          const fresh = d.rows.find((x: Row) => x.supplier_id === r.supplier_id);
-          if (fresh) Object.assign(r, { kharcha: fresh.kharcha, bill_id: fresh.bill_id, bill_status: fresh.bill_status });
+          r.kharcha = [...r.kharcha, { id: null, client_id: clientId, amount: kharcha.amount, tag: kharcha.tag, note: null, pending: queued }];
           r._pending = (r._pending || []).filter((p) => p.key !== key);
         }
         if (ready && r._ver === ver) {
-          r._state = 'saved';
+          r._state = queued ? 'waiting' : 'saved';
           if (r.weight == null) r.amount = null;
         } else if (r._state === 'saving') r._state = 'dirty';
+        const c = result?.conflicts?.[0];
+        if (c?.what === 'kept_newer') {
+          // Someone changed this day after this change was made: theirs stays.
+          const t = c.theirs || {};
+          Object.assign(r, { weight: t.weight, rate: t.rate, amount: amountOf(t.weight, t.rate), _orig: t.weight, _origRate: t.rate, _state: 'saved' });
+          render();
+          toast(`${r.supplier_name}: ${t.by || 'someone'} changed this day more recently, so their ${t.weight ?? '—'} kg × ${t.rate ?? '—'} was kept. See Settings → Sync problems.`, 'error');
+        } else if (c) {
+          toast(`${r.supplier_name}: replaced ${c.theirs?.weight ?? '—'} kg entered by ${c.theirs?.by || 'someone'}. See Settings → Sync problems.`);
+        }
+        if (result?.skipped_closed?.length) toast(`${r.supplier_name}: this month is closed, nothing was saved`, 'error');
       } catch (e: any) {
         r._state = 'error';
         if (kharcha) {
@@ -358,9 +382,28 @@ import App from '../layouts/App.astro';
     if (!b) return;
     const el = b.closest<HTMLElement>('.row')!;
     const i = Number(el.dataset.i);
+    const k = rows[i].kharcha[Number(b.dataset.delK)];
+    if (!k) return;
     await busy(b, async () => {
-      await api(`/kharcha/${b.dataset.delK}`, { method: 'DELETE' });
-      rows[i].kharcha = rows[i].kharcha.filter((k) => String(k.id) !== b.dataset.delK);
+      try {
+        const id = k.id != null && k.id > 0 ? k.id : null;
+        const { queued } = await submit({ kind: 'kharcha_del', id, client_id: k.client_id ?? null,
+          label: `${rows[i].supplier_name} · ${prettyDate(current)}: remove kharcha ${k.amount}${k.tag || ''}` });
+        rows[i].kharcha = rows[i].kharcha.filter((x) => x !== k);
+        if (queued) rows[i]._state = 'waiting';
+        refreshRow(i);
+      } catch (e: any) { toast(e.message, 'error'); }
+    });
+  });
+
+  // Waiting changes reached the server: the rows waiting on them are saved now.
+  window.addEventListener('petalboard:outbox-sent', async () => {
+    if ((await outboxStatus()).waiting) return;
+    rows.forEach((r, i) => {
+      if (r._state !== 'waiting' && !r.pending && !r.kharcha.some((k) => k.pending)) return;
+      if (r._state === 'waiting') r._state = 'saved';
+      r.pending = false;
+      r.kharcha = r.kharcha.map((k) => ({ ...k, pending: false }));
       refreshRow(i);
     });
   });

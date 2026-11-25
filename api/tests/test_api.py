@@ -113,6 +113,46 @@ def test_daily_entry_creates_bills(client, flower):
     assert next(x for x in nxt["rows"] if x["supplier_id"] == sid)["last_rate"] == 110
 
 
+def test_outbox_replays_are_safe_and_later_change_wins(client, flower):
+    """A phone's queued changes: sent twice = saved once; two changes to one day = the one made later wins."""
+    sid = client.post("/suppliers", json={"name": "Outbox Test", "flower_id": flower["id"]}).json()["id"]
+    url = "/daily/2026-12-05"
+
+    def put(**row):
+        return client.put(url, json={"rows": [{"supplier_id": sid, **row}]}).json()
+
+    def day():
+        return next(x for x in client.get(url).json()["rows"] if x["supplier_id"] == sid)
+
+    # A kharcha sent twice (reply lost the first time) is saved once.
+    for _ in range(2):
+        assert put(add_kharcha=300, kharcha_client_id="k-1")["saved"] == 1
+    assert [k["amount"] for k in day()["kharcha"]] == [300]
+    assert day()["kharcha"][0]["client_id"] == "k-1"
+    # Only a kharcha (no weight/rate keys) leaves the day's weight alone.
+    put(weight=10, rate=100, made_at="2026-11-20T08:00:00Z", base={"weight": None, "rate": None})
+    put(add_kharcha=50, kharcha_client_id="k-2")
+    assert day()["weight"] == 10 and len(day()["kharcha"]) == 2
+    # One phone queued two edits; they arrive in order: the second (made later) wins with no conflict.
+    put(weight=11, rate=100, made_at="2026-11-20T09:00:00Z", base={"weight": 10, "rate": 100})
+    r = put(weight=12, rate=100, made_at="2026-11-20T09:05:00Z", base={"weight": 11, "rate": 100})
+    assert r["conflicts"] == [] and day()["weight"] == 12
+    # A change made earlier than the one already saved loses, and is reported.
+    r = put(weight=9, rate=100, made_at="2026-11-20T08:30:00Z", base={"weight": 10, "rate": 100})
+    assert r["conflicts"][0]["what"] == "kept_newer" and r["conflicts"][0]["theirs"]["weight"] == 12
+    assert day()["weight"] == 12
+    # A later change made on a phone that had not seen the last one wins, and the replaced value is reported.
+    r = put(weight=15, rate=100, made_at="2026-11-20T10:00:00Z", base={"weight": 10, "rate": 100})
+    assert r["conflicts"][0]["what"] == "replaced" and r["conflicts"][0]["theirs"]["weight"] == 12
+    assert day()["weight"] == 15
+    # The same change sent again is not a conflict.
+    assert put(weight=15, rate=100, made_at="2026-11-20T10:00:00Z", base={"weight": 10, "rate": 100})["conflicts"] == []
+    # Delete a kharcha by the device's id; a second delete says it is gone.
+    assert client.delete("/kharcha/by-client/k-2").status_code == 200
+    assert client.delete("/kharcha/by-client/k-2").status_code == 404
+    assert [k["client_id"] for k in day()["kharcha"]] == ["k-1"]
+
+
 def test_reports(client):
     rep = client.get("/reports/month", params={"month": "2026-11"}).json()
     assert rep["kpis"]["total"] > 0

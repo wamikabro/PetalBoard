@@ -160,8 +160,29 @@ is refused with "This server already has data".
 - A small status in the header: "Offline · 3 changes waiting" / "All saved".
 - Closing months, khaata close and advances stay online-only at first (money decisions, need fresh balances).
 
+Done for the daily entry page (2026-11-25):
+- Server (migration v4): `kharcha.client_id` (unique; a kharcha sent twice is saved once), `bill_days.made_at`
+  (when the change was made, capped at the server's time). `PUT /daily/{date}` rows take `made_at`, `base`
+  (the weight/rate the phone showed) and `kharcha_client_id`; leaving out weight/rate/note only adds the kharcha.
+  A change made earlier than the saved one is not applied (`kept_newer`); one that replaces someone else's value
+  is applied and reported (`replaced`); both come back in `conflicts`. `DELETE /kharcha/by-client/{id}`.
+  Test: `test_outbox_replays_are_safe_and_later_change_wins`.
+- Phone: `web/src/lib/outbox.ts`. A save goes straight to the server; with no connection (or anything already
+  waiting) it goes to the `outbox` store and is sent in order on: app open, `online`, the page coming back to
+  view, every minute, and before any read. Waiting changes are drawn on top of the device copy
+  (`applyPending` in `local.ts`), so pages and reloads show them. A kharcha removed before it was sent just
+  leaves the outbox. Refused changes and conflicts go to the `problems` store: Settings → "Changes made on this
+  device" lists both, with "Checked" to clear. Header/sidebar chip: "Offline · 3 changes waiting", "Sending…",
+  "All saved", "1 to check". The device copy download includes `waiting_changes`.
+- Checked in headless Chrome with the API stopped: weight/rate and kharcha on three rows show "Waiting", survive a
+  reload, the bills list shows the new (not yet created) November bills; after the API starts they all reach the
+  server once, chips turn to "Saved". Conflict: an offline change to a day that another device changed later is
+  not applied and is listed to check.
+- Not done yet: Background Sync on Android (sending while the app is closed), offline editing on the bill page
+  (it still saves online only), offline "New supplier".
+
 ### Order
-4a → 4b read-only → offline daily entry and kharcha → offline bill editing → the rest.
+4a → 4b read-only → offline daily entry and kharcha (done) → offline bill editing → the rest.
 
 ## Earlier backlog
 See the "Next steps" in `CLAUDE.md` (owner questions, August 2026, closing months in order, deployment items).

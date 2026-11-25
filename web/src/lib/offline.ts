@@ -14,7 +14,7 @@
 //   - If a reply would make the copy much smaller (e.g. 300 bills here, 20 on the server), it is
 //     refused and a warning is shown. Someone must choose to accept it in Settings.
 import { API_URL, getToken } from './api';
-import { LOCAL_TABLES, LocalError, localAnswer, type Tables } from './local';
+import { LOCAL_TABLES, LocalError, applyPending, localAnswer, type Tables } from './local';
 
 export const SYNC_TABLES = ['shop_settings', 'users', 'flowers', 'suppliers', 'investors', 'bills', 'bill_days', 'kharcha',
   'advances', 'khaata_shares', 'investor_entries', 'khaatas'] as const;
@@ -46,14 +46,22 @@ let dbPromise: Promise<IDBDatabase> | null = null;
 function openDb(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    const req = indexedDB.open(DB_NAME, 2);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');
       if (!db.objectStoreNames.contains('responses')) db.createObjectStore('responses');
       for (const t of SYNC_TABLES) if (!db.objectStoreNames.contains(t)) db.createObjectStore(t, { keyPath: '_key' });
+      // v2: changes made here that still have to reach the server, and changes the server did not take as they were.
+      if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'seq', autoIncrement: true });
+      if (!db.objectStoreNames.contains('problems')) db.createObjectStore('problems', { keyPath: 'id', autoIncrement: true });
     };
-    req.onsuccess = () => resolve(req.result);
+    // Another tab opened a newer version: close so it can upgrade, and open again next time.
+    req.onblocked = () => {};
+    req.onsuccess = () => {
+      req.result.onversionchange = () => { req.result.close(); dbPromise = null; };
+      resolve(req.result);
+    };
     req.onerror = () => { dbPromise = null; reject(req.error); };
   });
   return dbPromise;
@@ -119,14 +127,60 @@ async function deviceTables(rev: number): Promise<Tables> {
 export async function deviceAnswer(url: string): Promise<{ data: any; at: number } | null> {
   const saved = await savedResponse(url);
   const s = await getState();
-  if (!s.rev || !s.lastSync || (saved && saved.at >= s.lastSync)) return saved;
+  const pending = await outboxItems();
+  // Changes waiting to be sent must show, so with any of them the answer is always worked out here.
+  if (!s.rev || !s.lastSync || (saved && saved.at >= s.lastSync && !pending.length)) return saved;
   try {
-    const data = localAnswer(keyOf(url), await deviceTables(s.rev));
+    const data = localAnswer(keyOf(url), applyPending(await deviceTables(s.rev), pending));
     if (data !== undefined) return { data, at: s.lastSync };
   } catch (e) {
     if (e instanceof LocalError && !saved) throw e;
   }
   return saved;
+}
+
+// ---------- changes waiting to be sent (outbox) and changes the server did not take (problems) ----------
+
+export async function outboxItems(): Promise<any[]> {
+  try {
+    const db = await openDb();
+    return await done(db.transaction('outbox').objectStore('outbox').getAll());
+  } catch {
+    return [];
+  }
+}
+export async function outboxPut(item: any): Promise<number> {
+  const db = await openDb();
+  const tx = db.transaction('outbox', 'readwrite');
+  const key = await done(tx.objectStore('outbox').put(item));
+  await finished(tx);
+  return Number(key);
+}
+export async function outboxDelete(seq: number) {
+  const db = await openDb();
+  const tx = db.transaction('outbox', 'readwrite');
+  tx.objectStore('outbox').delete(seq);
+  await finished(tx);
+}
+export async function problemsAll(): Promise<any[]> {
+  try {
+    const db = await openDb();
+    return await done(db.transaction('problems').objectStore('problems').getAll());
+  } catch {
+    return [];
+  }
+}
+export async function problemAdd(p: any) {
+  const db = await openDb();
+  const tx = db.transaction('problems', 'readwrite');
+  tx.objectStore('problems').add({ at: Date.now(), ...p });
+  await finished(tx);
+}
+export async function problemDelete(id: number) {
+  const db = await openDb();
+  const tx = db.transaction('problems', 'readwrite');
+  tx.objectStore('problems').delete(id);
+  await finished(tx);
 }
 
 // ---------- the full copy ----------
@@ -288,6 +342,8 @@ export async function deviceCopy(): Promise<Blob> {
   for (const t of SYNC_TABLES) {
     out[t] = (await done(tx.objectStore(t).getAll())).map(({ _key, ...row }: any) => row);
   }
+  // Changes made here that have not reached the server yet (not in the tables above).
+  out.waiting_changes = await outboxItems();
   return new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' });
 }
 
