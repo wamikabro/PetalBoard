@@ -89,6 +89,9 @@ import App from '../layouts/App.astro';
     note: string | null; kharcha: K[]; last_rate: number | null;
     _state?: 'saved' | 'dirty' | 'saving' | 'error';
     _orig?: number | null; // weight as last saved
+    _origRate?: number | null; // rate as last saved
+    _ver?: number; // bumped on every keystroke, so a slow save does not mark newer typing as saved
+    _pending?: { key: number; amount: number; tag: string | null }[]; // kharcha sent, not yet confirmed
   };
 
   const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -128,13 +131,22 @@ import App from '../layouts/App.astro';
     }
   }
 
-  function rowHtml(r: Row, i: number) {
-    const locked = !canEdit || r.bill_status === 'closed';
-    const dis = locked ? 'disabled' : '';
+  const isLocked = (r: Row) => !canEdit || r.bill_status === 'closed';
+
+  function chipsHtml(r: Row) {
+    const locked = isLocked(r);
     const kh = r.kharcha.map((k) => `
       <span class="chip bg-brand-soft text-brand">${num(k.amount)}${k.tag ? `<sup>${esc(k.tag)}</sup>` : ''}${k.note ? ` · ${esc(k.note)}` : ''}
         ${locked ? '' : `<button data-del-k="${k.id}" class="ml-0.5 -mr-1 px-1 rounded hover:bg-brand/20" aria-label="Remove ${num(k.amount)}">×</button>`}
       </span>`).join('');
+    const pend = (r._pending || []).map((k) =>
+      `<span class="chip bg-brand-soft text-brand opacity-50">${num(k.amount)}${k.tag ? `<sup>${esc(k.tag)}</sup>` : ''}</span>`).join('');
+    return kh + pend;
+  }
+
+  function rowHtml(r: Row, i: number) {
+    const locked = isLocked(r);
+    const dis = locked ? 'disabled' : '';
     const lab = (t: string) => `<span class="md:hidden block text-[11px] font-medium text-muted mb-0.5">${t}</span>`;
     return `
     <div class="row grid grid-cols-3 md:grid-cols-[minmax(150px,1.4fr)_110px_100px_120px_minmax(220px,2fr)_70px] gap-x-2 gap-y-2 px-3 md:px-4 py-3 md:py-2.5 items-end md:items-center hover:bg-sunken/40 ${locked ? 'opacity-70' : ''}" data-i="${i}">
@@ -150,7 +162,7 @@ import App from '../layouts/App.astro';
       <div class="min-w-0 text-right">${lab('Amount')}
         <div class="tabular-nums font-semibold md:font-medium text-base md:text-sm py-2 md:py-0" data-amount>${r.amount != null ? num(r.amount) : '<span class="text-faint">—</span>'}</div></div>
       <div class="col-span-3 md:col-span-1 flex flex-wrap items-center gap-1.5">
-        ${kh}
+        <span class="contents" data-chips>${chipsHtml(r)}</span>
         ${locked ? '' : `<input class="cell input md:!border-transparent !w-32 md:!w-28 !text-left" data-f="kharcha" type="number" inputmode="numeric" enterkeyhint="done" placeholder="+ kharcha" aria-label="Add kharcha for ${esc(r.supplier_name)}" />
         <input class="cell input md:!border-transparent !w-14 md:!w-12 !text-left" data-f="tag" maxlength="4" placeholder="tag" title="Letter written beside it on paper, e.g. B" aria-label="Tag" />
         <button type="button" class="md:hidden btn-ghost !px-3 !py-1.5 text-xs" data-add-k>Add</button>`}
@@ -182,6 +194,7 @@ import App from '../layouts/App.astro';
     const r = rows[i];
     el.querySelector('[data-amount]')!.innerHTML = r.amount != null ? num(r.amount) : '<span class="text-faint">—</span>';
     el.querySelectorAll('[data-state], [data-state-m]').forEach((s) => (s.innerHTML = stateDot(r)));
+    el.querySelector('[data-chips]')!.innerHTML = chipsHtml(r);
     tiles();
   }
 
@@ -192,7 +205,7 @@ import App from '../layouts/App.astro';
     rowsBox.innerHTML = '<p class="p-8 text-center text-muted text-sm">Loading…</p>';
     try {
       const d = await api(`/daily/${current}`);
-      rows = d.rows.map((r: Row) => ({ ...r, _orig: r.weight }));
+      rows = d.rows.map((r: Row) => ({ ...r, _orig: r.weight, _origRate: r.rate }));
       const closed = rows.filter((r) => r.bill_status === 'closed').length;
       $('closed-note').classList.toggle('hidden', !closed);
       $('closed-note').textContent = closed ? `${closed} supplier bill(s) for this month are closed and locked. Reopen them from the Bills page to change them.` : '';
@@ -204,32 +217,53 @@ import App from '../layouts/App.astro';
     }
   }
 
-  async function save(i: number, kharcha?: { amount: number; tag: string | null }) {
+  // Saves run one at a time, in order, and only touch their own row on screen,
+  // so whatever is being typed elsewhere (or in the same row) is never wiped.
+  let queue: Promise<unknown> = Promise.resolve();
+  let pendingKey = 0;
+
+  function save(i: number, kharcha?: { amount: number; tag: string | null }) {
     const r = rows[i];
-    r._state = 'saving';
+    // Weight typed but no rate yet: the day itself is not ready, so keep what is saved and only add the kharcha.
+    const ready = !(r.weight != null && r.rate == null);
+    const weight = ready ? r.weight : r._orig ?? null;
+    const rate = ready ? (r.weight == null ? null : r.rate) : r._origRate ?? null;
+    const ver = r._ver;
+    const key = ++pendingKey;
+    if (kharcha) r._pending = [...(r._pending || []), { key, ...kharcha }];
+    if (ready) r._state = 'saving';
     refreshRow(i);
-    try {
-      await api(`/daily/${current}`, { method: 'PUT', body: { rows: [{
-        supplier_id: r.supplier_id, weight: r.weight, rate: r.weight == null ? null : r.rate, note: r.note,
-        add_kharcha: kharcha?.amount ?? null, kharcha_tag: kharcha?.tag ?? null,
-      }] } });
-      if (kharcha) {
-        // Reload this row so the new kharcha chip has its id.
-        const d = await api(`/daily/${current}`);
-        const fresh = d.rows.find((x: Row) => x.supplier_id === r.supplier_id);
-        if (fresh) rows[i] = { ...fresh, _state: 'saved', _orig: fresh.weight };
-        render();
-      } else {
-        r._state = 'saved';
-        r._orig = r.weight;
-        if (r.weight == null) r.amount = null;
-        refreshRow(i);
+    const job = async () => {
+      try {
+        await api(`/daily/${current}`, { method: 'PUT', body: { rows: [{
+          supplier_id: r.supplier_id, weight, rate, note: r.note,
+          add_kharcha: kharcha?.amount ?? null, kharcha_tag: kharcha?.tag ?? null,
+        }] } });
+        r._orig = weight;
+        r._origRate = rate;
+        if (kharcha) {
+          // Fetch the day again so the new kharcha chip gets its id (needed to remove it).
+          const d = await api(`/daily/${current}`);
+          const fresh = d.rows.find((x: Row) => x.supplier_id === r.supplier_id);
+          if (fresh) Object.assign(r, { kharcha: fresh.kharcha, bill_id: fresh.bill_id, bill_status: fresh.bill_status });
+          r._pending = (r._pending || []).filter((p) => p.key !== key);
+        }
+        if (ready && r._ver === ver) {
+          r._state = 'saved';
+          if (r.weight == null) r.amount = null;
+        } else if (r._state === 'saving') r._state = 'dirty';
+      } catch (e: any) {
+        r._state = 'error';
+        if (kharcha) {
+          r._pending = (r._pending || []).filter((p) => p.key !== key);
+          const box = rowsBox.querySelector<HTMLInputElement>(`.row[data-i="${i}"] [data-f="kharcha"]`);
+          if (box && !box.value) box.value = String(kharcha.amount); // give it back to retry
+        }
+        toast(`${r.supplier_name}: ${e.message}`, 'error');
       }
-    } catch (e: any) {
-      r._state = 'error';
       refreshRow(i);
-      toast(`${r.supplier_name}: ${e.message}`, 'error');
-    }
+    };
+    queue = queue.then(job, job);
   }
 
   // Typing updates the amount live; leaving the row saves it.
@@ -242,6 +276,7 @@ import App from '../layouts/App.astro';
     (r as any)[inp.dataset.f] = parse(inp.value);
     r.amount = amountOf(r.weight, r.rate);
     r._state = 'dirty';
+    r._ver = (r._ver || 0) + 1;
     refreshRow(i);
   });
 
@@ -326,8 +361,7 @@ import App from '../layouts/App.astro';
     await busy(b, async () => {
       await api(`/kharcha/${b.dataset.delK}`, { method: 'DELETE' });
       rows[i].kharcha = rows[i].kharcha.filter((k) => String(k.id) !== b.dataset.delK);
-      render();
-      toast('Kharcha removed');
+      refreshRow(i);
     });
   });
 
@@ -380,7 +414,8 @@ import App from '../layouts/App.astro';
   });
 
   window.addEventListener('beforeunload', (e) => {
-    if (rows.some((r) => r._state === 'dirty' || r._state === 'saving')) e.preventDefault();
+    const typed = [...rowsBox.querySelectorAll<HTMLInputElement>('[data-f="kharcha"]')].some((i) => i.value.trim());
+    if (typed || rows.some((r) => r._state === 'dirty' || r._state === 'saving' || r._pending?.length)) e.preventDefault();
   });
 
   if (!canEdit) $('rate-fill').classList.add('hidden');

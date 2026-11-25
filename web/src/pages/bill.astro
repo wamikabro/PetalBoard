@@ -67,36 +67,78 @@ import App from '../layouts/App.astro';
     </details>`;
   }
 
+  // Kharcha sent to the server but not confirmed yet: shown faded until it is.
+  const pendingK = new Map<number, { key: number; amount: number; tag: string | null }[]>();
+  let pendingKey = 0;
+  type Day = Bill['days'][number];
+
+  function chipsHtml(d: Day, locked: boolean) {
+    const chip = (amount: number, tag: string | null, extra = '') =>
+      `<span class="chip bg-brand-soft text-brand transition-opacity ${extra}">${num(amount)}${tag ? `<sup>${esc(tag)}</sup>` : ''}`;
+    const bf = d.day === 1 && bill.opening_due > 0 ? `<span class="chip bg-sunken text-muted" title="Carried from last month">${num(bill.opening_due)} b/f</span>` : '';
+    const kh = d.kharcha.map((k) => `${chip(k.amount, k.tag)}
+        ${locked ? '' : `<button data-del-k="${k.id}" class="px-1 rounded hover:bg-brand/20" aria-label="Remove">×</button>`}</span>`).join('');
+    const pend = (pendingK.get(d.day) || []).map((k) => chip(k.amount, k.tag, 'opacity-50') + '</span>').join('');
+    return bf + kh + pend;
+  }
+
+  const amountHtml = (d: Day) =>
+    (d.amount != null ? num(d.amount) : '<span class="text-faint">—</span>') +
+    (d.mismatch !== undefined ? `<span class="block text-[11px] text-warn" title="weight × rate">should be ${num(d.mismatch)}</span>` : '');
+
+  function footHtml() {
+    const t = bill.totals;
+    return `<tr class="font-semibold bg-sunken/60">
+          <td class="px-3 py-2">Total</td><td class="px-3 py-2 num">${kg(t.weight)}</td><td class="px-3 py-2 num text-muted font-normal">${t.avg_rate ? 'avg ' + t.avg_rate : ''}</td>
+          <td class="px-3 py-2 num">${num(t.total)}</td><td class="px-3 py-2">${num(t.kharcha)}</td><td class="wide-only"></td><td></td></tr>`;
+  }
+
+  const isLocked = () => bill.status === 'closed' || !can('clerk');
+
   function editGrid() {
-    const locked = bill.status === 'closed' || !can('clerk');
+    const locked = isLocked();
     const [y, m] = bill.month.split('-').map(Number);
     const rows = bill.days.map((d) => {
       const dow = new Date(y, m - 1, d.day).toLocaleDateString('en-GB', { weekday: 'short' });
-      const kh = d.kharcha.map((k) => `<span class="chip bg-brand-soft text-brand">${num(k.amount)}${k.tag ? `<sup>${esc(k.tag)}</sup>` : ''}
-        ${locked ? '' : `<button data-del-k="${k.id}" class="px-1 rounded hover:bg-brand/20" aria-label="Remove">×</button>`}</span>`).join('');
       return `<tr data-day="${d.day}" class="${d.mismatch !== undefined ? 'bg-warn/5' : ''}">
         <td class="!py-1 whitespace-nowrap"><span class="font-medium tabular-nums">${d.day}</span> <span class="text-xs text-muted hidden sm:inline">${dow}</span></td>
         <td class="!py-1 !px-1"><input class="cell" data-f="weight" type="number" inputmode="decimal" step="0.001" min="0" value="${d.weight ?? ''}" ${locked ? 'disabled' : ''} aria-label="Weight day ${d.day}" /></td>
         <td class="!py-1 !px-1"><input class="cell" data-f="rate" type="number" inputmode="decimal" step="0.01" min="0" value="${d.rate ?? ''}" ${locked ? 'disabled' : ''} aria-label="Rate day ${d.day}" /></td>
-        <td class="!py-1 num font-medium" data-amount>${d.amount != null ? num(d.amount) : '<span class="text-faint">—</span>'}${d.mismatch !== undefined ? `<span class="block text-[11px] text-warn" title="weight × rate">should be ${num(d.mismatch)}</span>` : ''}</td>
-        <td class="!py-1"><div class="flex flex-wrap gap-1 items-center">${d.day === 1 && bill.opening_due > 0 ? `<span class="chip bg-sunken text-muted" title="Carried from last month">${num(bill.opening_due)} b/f</span>` : ''}${kh}
-          ${locked ? '' : `<input class="cell !w-16 sm:!w-24 !text-left" data-f="kharcha" type="number" inputmode="numeric" enterkeyhint="done" placeholder="+ add" aria-label="Add kharcha day ${d.day}" />`}</div></td>
+        <td class="!py-1 num font-medium" data-amount>${amountHtml(d)}</td>
+        <td class="!py-1"><div class="flex flex-wrap gap-1 items-center"><span class="contents" data-chips>${chipsHtml(d, locked)}</span>
+          ${locked ? '' : `<input class="cell !w-16 sm:!w-24 !text-left" data-f="kharcha" type="text" inputmode="numeric" autocomplete="off" enterkeyhint="done" placeholder="+ add" aria-label="Add kharcha day ${d.day}" />`}</div></td>
         <td class="!py-1 !px-1 wide-only"><input class="cell !text-left" data-f="note" value="${esc(d.note ?? '')}" ${locked ? 'disabled' : ''} placeholder="" aria-label="Note day ${d.day}" /></td>
         <td class="!py-1 w-10 sm:w-16 text-right text-xs" data-state></td>
       </tr>`;
     }).join('');
-    const t = bill.totals;
     return `
     <div class="card overflow-x-auto">
       <table class="tbl md:min-w-[720px]">
         <thead><tr><th class="w-10 sm:w-20">Day</th><th class="text-right sm:w-28">kg</th><th class="text-right sm:w-28">Rate</th><th class="text-right sm:w-28">Amount</th><th>Kharcha</th><th class="wide-only">Note</th><th></th></tr></thead>
         <tbody id="grid">${rows}</tbody>
-        <tfoot><tr class="font-semibold bg-sunken/60">
-          <td class="px-3 py-2">Total</td><td class="px-3 py-2 num">${kg(t.weight)}</td><td class="px-3 py-2 num text-muted font-normal">${t.avg_rate ? 'avg ' + t.avg_rate : ''}</td>
-          <td class="px-3 py-2 num">${num(t.total)}</td><td class="px-3 py-2">${num(t.kharcha)}</td><td class="wide-only"></td><td></td></tr></tfoot>
+        <tfoot id="grid-foot">${footHtml()}</tfoot>
       </table>
     </div>
-    <p class="text-xs text-muted no-print hidden sm:block">Each day saves when you leave it. Kharcha is added when you press Enter (to add a tag) or leave the box; several on one day show as 1250+200 on the bill.</p>`;
+    <p class="text-xs text-muted no-print hidden sm:block">Everything saves on its own as you go. Several kharcha on one day show as 1250+200 on the bill; for the small letter written beside one, type it after the amount (1250B).</p>`;
+  }
+
+  /** Show a fresh copy of the bill from the server without redrawing the grid, so boxes still being typed in and the cursor stay put. */
+  function applyBill() {
+    const set = (sel: string, html: string) => { const el = page.querySelector(sel); if (el) el.innerHTML = html; };
+    set('#warn-box', warnings());
+    set('#sheet', PRINT_NOTE + billSheetHtml(bill, settings));
+    set('#summary-box', summary());
+    set('#grid-foot', footHtml());
+    const locked = isLocked();
+    for (const d of bill.days) {
+      const tr = page.querySelector<HTMLElement>(`tr[data-day="${d.day}"]`);
+      if (!tr) continue;
+      tr.querySelector('[data-chips]')!.innerHTML = chipsHtml(d, locked);
+      if (!dirty.has(d.day)) {
+        tr.querySelector('[data-amount]')!.innerHTML = amountHtml(d);
+        tr.classList.toggle('bg-warn/5', d.mismatch !== undefined);
+      }
+    }
   }
 
   function render() {
@@ -124,7 +166,7 @@ import App from '../layouts/App.astro';
       </div>
     </div>
 
-    ${warnings()}
+    <div id="warn-box">${warnings()}</div>
 
     <div class="no-print flex gap-1 border-b border-line">
       ${(['paper', 'edit'] as const).map((k) => `<button data-tab="${k}" class="px-4 py-2 text-sm font-medium border-b-2 -mb-px ${tab === k ? 'border-brand text-brand' : 'border-transparent text-muted hover:text-ink'}">${k === 'paper' ? 'Paper view' : 'Edit entries'}</button>`).join('')}
@@ -133,9 +175,9 @@ import App from '../layouts/App.astro';
     <div class="grid lg:grid-cols-[1fr_300px] gap-5 items-start">
       <div class="min-w-0">
         <div class="${tab === 'paper' ? '' : 'hidden print:block'}" id="sheet">${PRINT_NOTE}${billSheetHtml(bill, settings)}</div>
-        <div class="${tab === 'edit' ? '' : 'hidden'} no-print">${editGrid()}</div>
+        <div class="${tab === 'edit' ? '' : 'hidden'} no-print" id="edit-pane">${editGrid()}</div>
       </div>
-      <div class="no-print lg:sticky lg:top-6">${summary()}</div>
+      <div class="no-print lg:sticky lg:top-6" id="summary-box">${summary()}</div>
     </div>`;
   }
 
@@ -145,11 +187,85 @@ import App from '../layouts/App.astro';
     render();
   }
 
-  // ---- editing (event delegation; the grid is re-rendered after each save) ----
+  // ---- editing ----
+  // Every change saves on its own. After a save the page is updated in place (applyBill), never
+  // redrawn, so anything typed elsewhere stays. Saves run one at a time so the newest bill wins.
   const dirty = new Set<number>();
+  let queue: Promise<unknown> = Promise.resolve();
+  const enqueue = (job: () => Promise<void>) => (queue = queue.then(job, job));
+
   function rowVals(tr: HTMLElement) {
     const v = (f: string) => (tr.querySelector<HTMLInputElement>(`[data-f="${f}"]`)?.value ?? '').trim();
     return { weight: v('weight') === '' ? null : Number(v('weight')), rate: v('rate') === '' ? null : Number(v('rate')), note: v('note') || null };
+  }
+  const rowOf = (day: number) => page.querySelector<HTMLElement>(`tr[data-day="${day}"]`);
+  const setState = (day: number, html: string) => {
+    const cell = rowOf(day)?.querySelector('[data-state]');
+    if (cell) cell.innerHTML = html;
+  };
+  const saving = new Map<number, number>(); // day → saves still running
+  function startSave(day: number) {
+    saving.set(day, (saving.get(day) || 0) + 1);
+    if (!dirty.has(day)) setState(day, '<span class="text-muted">Saving…</span>');
+  }
+  function endSave(day: number, ok: boolean) {
+    const left = Math.max(0, (saving.get(day) || 1) - 1);
+    saving.set(day, left);
+    if (!ok) return setState(day, '<span class="text-bad">Error</span>');
+    if (left || dirty.has(day)) return;
+    setState(day, '<span class="text-good">✓</span>');
+    setTimeout(() => { if (!dirty.has(day) && !saving.get(day)) setState(day, ''); }, 1500);
+  }
+
+  /** "1250", "1250B" or "1250 B" → amount and tag. */
+  function parseKharcha(v: string) {
+    const m = v.trim().match(/^(-?\d+)\s*([^\d\s]{1,4})?$/);
+    return m && Number(m[1]) ? { amount: Number(m[1]), tag: m[2] || null } : null;
+  }
+
+  /** Add whatever is typed in a day's kharcha box (shown faded straight away, solid once saved). */
+  function addTypedKharcha(tr: HTMLElement) {
+    const inp = tr.querySelector<HTMLInputElement>('[data-f="kharcha"]');
+    if (!inp || !inp.value.trim()) return;
+    const k = parseKharcha(inp.value);
+    if (!k) return toast('Kharcha must be an amount, e.g. 1250 or 1250B', 'error');
+    const day = Number(tr.dataset.day);
+    const key = ++pendingKey;
+    inp.value = '';
+    pendingK.set(day, [...(pendingK.get(day) || []), { key, ...k }]);
+    tr.querySelector('[data-chips]')!.innerHTML = chipsHtml(bill.days.find((d) => d.day === day)!, false);
+    startSave(day);
+    const unpend = () => pendingK.set(day, (pendingK.get(day) || []).filter((p) => p.key !== key));
+    enqueue(async () => {
+      try {
+        bill = await api(`/bills/${id}/kharcha`, { method: 'POST', body: { day, amount: k.amount, tag: k.tag, note: null } });
+        unpend(); applyBill(); endSave(day, true);
+      } catch (ex: any) {
+        unpend(); applyBill(); endSave(day, false);
+        const box = rowOf(day)?.querySelector<HTMLInputElement>('[data-f="kharcha"]');
+        if (box && !box.value) box.value = `${k.amount}${k.tag || ''}`; // give it back to retry
+        toast(ex.message, 'error');
+      }
+    });
+  }
+
+  /** Save the day's weight, rate and note if they changed and are complete. */
+  function saveDay(tr: HTMLElement) {
+    const day = Number(tr.dataset.day);
+    if (!dirty.has(day)) return;
+    const { weight, rate, note } = rowVals(tr);
+    if ((weight == null) !== (rate == null)) return; // wait until both are there
+    dirty.delete(day);
+    startSave(day);
+    enqueue(async () => {
+      try {
+        bill = await api(`/bills/${id}/days/${day}`, { method: 'PUT', body: { weight, rate, note } });
+        applyBill(); endSave(day, true);
+      } catch (ex: any) {
+        dirty.add(day); endSave(day, false);
+        toast(ex.message, 'error');
+      }
+    });
   }
 
   page.addEventListener('input', (e) => {
@@ -163,65 +279,23 @@ import App from '../layouts/App.astro';
     dirty.add(Number(tr.dataset.day));
   });
 
-  page.addEventListener('focusout', async (e) => {
+  page.addEventListener('focusout', (e) => {
     const inp = e.target as HTMLInputElement;
     const tr = inp.closest<HTMLElement>('tr[data-day]');
     if (!tr) return;
+    if (inp.dataset.f === 'kharcha') addTypedKharcha(tr);
     const nxt = (e as FocusEvent).relatedTarget as HTMLElement | null;
-    // A kharcha typed but not added with Enter: add it when leaving the box.
-    if (inp.dataset.f === 'kharcha' && Number(inp.value)) {
-      const amount = Number(inp.value), kday = Number(tr.dataset.day);
-      inp.value = '';
-      try {
-        bill = await api(`/bills/${id}/kharcha`, { method: 'POST', body: { day: kday, amount, tag: null, note: null } });
-        const focusDay = nxt?.closest<HTMLElement>('tr[data-day]')?.dataset.day;
-        const focusField = nxt?.dataset.f;
-        render();
-        if (focusDay && focusField) page.querySelector<HTMLInputElement>(`tr[data-day="${focusDay}"] [data-f="${focusField}"]`)?.focus();
-        toast(`Kharcha ${num(amount)} added`);
-      } catch (ex: any) { inp.value = String(amount); toast(ex.message, 'error'); }
-      return;
-    }
-    if (nxt && tr.contains(nxt)) return;
-    const day = Number(tr.dataset.day);
-    if (!dirty.has(day)) return;
-    const { weight, rate, note } = rowVals(tr);
-    if ((weight == null) !== (rate == null)) return; // wait until both are there
-    dirty.delete(day);
-    tr.querySelector('[data-state]')!.innerHTML = '<span class="text-muted">Saving…</span>';
-    try {
-      bill = await api(`/bills/${id}/days/${day}`, { method: 'PUT', body: { weight, rate, note } });
-      const focusDay = nxt?.closest<HTMLElement>('tr[data-day]')?.dataset.day;
-      const focusField = nxt?.dataset.f;
-      render();
-      if (focusDay && focusField) page.querySelector<HTMLInputElement>(`tr[data-day="${focusDay}"] [data-f="${focusField}"]`)?.focus();
-      page.querySelector(`tr[data-day="${day}"] [data-state]`)!.innerHTML = '<span class="text-good">✓</span>';
-    } catch (ex: any) {
-      tr.querySelector('[data-state]')!.innerHTML = '<span class="text-bad">Error</span>';
-      toast(ex.message, 'error');
-    }
+    if (nxt && tr.contains(nxt)) return; // still on the same day
+    saveDay(tr);
   });
 
-  page.addEventListener('keydown', async (e) => {
+  page.addEventListener('keydown', (e) => {
     const inp = e.target as HTMLInputElement;
     const tr = inp.closest<HTMLElement>('tr[data-day]');
     if (!tr || !inp.dataset.f) return;
     if (inp.dataset.f === 'kharcha' && e.key === 'Enter') {
       e.preventDefault();
-      const amount = Number(inp.value);
-      if (!amount) return;
-      const day = Number(tr.dataset.day);
-      inp.value = ''; // the dialog takes focus; don't let the leave-the-box save add it too
-      const tag = (await dialog(`Kharcha ${num(amount)} on day ${day}`, `
-        <div><label class="label">Tag (optional, the small letter written beside it, e.g. B)</label><input name="tag" class="input" maxlength="4" /></div>
-        <div><label class="label">Note (optional)</label><input name="note" class="input" /></div>`, 'Add'));
-      if (!tag) { inp.value = String(amount); return; }
-      try {
-        bill = await api(`/bills/${id}/kharcha`, { method: 'POST', body: { day, amount, tag: tag.tag || null, note: tag.note || null } });
-        render();
-        page.querySelector<HTMLInputElement>(`tr[data-day="${day}"] [data-f="kharcha"]`)?.focus();
-        toast(`Kharcha ${num(amount)} added`);
-      } catch (ex: any) { toast(ex.message, 'error'); }
+      addTypedKharcha(tr); // stay in the box for the next one
       return;
     }
     const move = e.key === 'Enter' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
@@ -231,13 +305,39 @@ import App from '../layouts/App.astro';
     page.querySelector<HTMLInputElement>(`tr[data-day="${day}"] [data-f="${inp.dataset.f}"]`)?.focus();
   });
 
+  window.addEventListener('beforeunload', (e) => {
+    const typed = [...page.querySelectorAll<HTMLInputElement>('[data-f="kharcha"]')].some((i) => i.value.trim());
+    if (dirty.size || typed || [...saving.values()].some(Boolean)) e.preventDefault();
+  });
+
   page.addEventListener('click', async (e) => {
     const el = e.target as HTMLElement;
     const tabBtn = el.closest<HTMLButtonElement>('[data-tab]');
-    if (tabBtn) { tab = tabBtn.dataset.tab as any; setQuery({ tab }); render(); return; }
+    if (tabBtn) {
+      // Switch without redrawing, so nothing typed in the grid is lost.
+      tab = tabBtn.dataset.tab as any;
+      setQuery({ tab });
+      page.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach((b) => {
+        const on = b.dataset.tab === tab;
+        b.classList.toggle('border-brand', on); b.classList.toggle('text-brand', on);
+        b.classList.toggle('border-transparent', !on); b.classList.toggle('text-muted', !on); b.classList.toggle('hover:text-ink', !on);
+      });
+      const sheet = page.querySelector('#sheet')!;
+      sheet.classList.toggle('hidden', tab !== 'paper');
+      sheet.classList.toggle('print:block', tab !== 'paper');
+      page.querySelector('#edit-pane')!.classList.toggle('hidden', tab !== 'edit');
+      return;
+    }
     const del = el.closest<HTMLButtonElement>('[data-del-k]');
     if (del) {
-      await busy(del, async () => { bill = await api(`/kharcha/${del.dataset.delK}`, { method: 'DELETE' }); render(); toast('Kharcha removed'); });
+      const day = Number(del.closest<HTMLElement>('tr[data-day]')!.dataset.day);
+      del.closest('.chip')?.classList.add('opacity-40');
+      del.disabled = true;
+      startSave(day);
+      enqueue(async () => {
+        try { bill = await api(`/kharcha/${del.dataset.delK}`, { method: 'DELETE' }); applyBill(); endSave(day, true); }
+        catch (ex: any) { applyBill(); endSave(day, false); toast(ex.message, 'error'); }
+      });
       return;
     }
     const btn = el.closest<HTMLButtonElement>('button');
@@ -257,13 +357,14 @@ import App from '../layouts/App.astro';
         <div><label class="label">Note</label><textarea name="note" rows="3" class="input">${esc(bill.note ?? '')}</textarea></div>`);
       if (v) await busy(btn, async () => {
         bill = await api(`/bills/${id}`, { method: 'PATCH', body: { commission_pct: Number(v.commission_pct), opening_due: Number(v.opening_due || 0), note: v.note || null } });
-        render(); toast('Saved');
+        applyBill(); toast('Saved');
       });
     }
     if (btn.id === 'close') closeDialog(btn);
   });
 
   async function closeDialog(btn: HTMLButtonElement) {
+    await queue; // let entries still saving finish, so the final total is up to date
     const f = bill.totals.final;
     const owes = f >= 0;
     const html = `
