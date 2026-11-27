@@ -5,6 +5,8 @@ const VERSION = '__VERSION__';
 const PRECACHE = __PRECACHE__;
 const APP = `petalboard-app-${VERSION}`;
 const FONTS = 'petalboard-fonts';
+// Some servers add "Vary: Origin"; a saved file must still be found when the request comes from a script.
+const MATCH = { ignoreSearch: true, ignoreVary: true };
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -24,27 +26,34 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
-/** Try the network for a little while, then fall back to the saved copy. */
-async function page(request) {
+/** Pages: the saved copy at once (the app opens instantly, with or without internet), refreshed from the
+ *  network in the background for next time. With no saved copy yet, the network (then the dashboard). */
+async function page(event) {
+  const { request } = event;
   const url = new URL(request.url);
   const key = url.pathname.replace(/\.html$/, '').replace(/\/$/, '') || '/';
   const cache = await caches.open(APP);
-  try {
-    const res = await Promise.race([
-      fetch(request),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), 4000)),
-    ]);
-    if (res.ok) cache.put(key, res.clone());
+  const hit = await cache.match(key, MATCH);
+  const fresh = fetch(request).then((res) => {
+    // Only a normal page goes in (not a 404 page, a redirect or an error).
+    if (res.ok && !res.redirected && (res.headers.get('content-type') || '').includes('text/html')) cache.put(key, res.clone());
     return res;
+  });
+  if (hit) {
+    event.waitUntil(fresh.catch(() => {}));
+    return hit;
+  }
+  try {
+    return await fresh;
   } catch {
-    return (await cache.match(key)) || (await cache.match('/')) || Response.error();
+    return (await cache.match('/', MATCH)) || Response.error();
   }
 }
 
 /** Saved copy first (files have a hash in their name, so they never change). */
 async function asset(request) {
   const cache = await caches.open(APP);
-  const hit = await cache.match(request, { ignoreSearch: true });
+  const hit = await cache.match(request, MATCH);
   if (hit) return hit;
   const res = await fetch(request);
   if (res.ok) cache.put(request, res.clone());
@@ -54,7 +63,7 @@ async function asset(request) {
 /** Google Fonts: saved copy at once, refreshed in the background. */
 async function font(request) {
   const cache = await caches.open(FONTS);
-  const hit = await cache.match(request);
+  const hit = await cache.match(request, { ignoreVary: true });
   const fresh = fetch(request).then((res) => {
     if (res.ok || res.type === 'opaque') cache.put(request, res.clone());
     return res;
@@ -67,7 +76,7 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin === self.location.origin) {
-    if (request.mode === 'navigate') event.respondWith(page(request));
+    if (request.mode === 'navigate') event.respondWith(page(event));
     else event.respondWith(asset(request));
   } else if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
     event.respondWith(font(request));

@@ -207,3 +207,31 @@ Owner: "make almost everything work offline". Builds on 4c (daily entry already 
       close with a 5,000 cut, new investor + money; reload; API back: all 8 saves arrived once, the database matches.
 
 Stays online only: log in / out, users, restore, backup and Excel downloads (made by the server).
+
+## 6. Offline that works on a real phone; logout keeps the data (asked 2026-11-27)
+
+Owner: "the offline version doesn't seem to work well. Make everything work offline. Logout shouldn't remove the
+data from the mobile at all; it should be an offline copy forever."
+
+Found by running the production build in headless Chrome as a phone, with the web server and API stopped and the
+page offline: pages waited ~10 s and several (bill, supplier, investor) stayed on "Loading…"; phones had no Log out
+button; logging out (or a login that ended) sent every page to /login, so the data on the phone could not be seen.
+
+- [x] Service worker: pages open from the saved copy at once and are refreshed in the background (was: network
+      first, 4 s wait). Saved files are found even when the server adds `Vary: Origin` (`ignoreVary`).
+- [x] `api()`: with no connection, or for 20 s after the server failed, reads come from the device at once; reads
+      with a device copy wait 6 s at most for the server; waiting saves are sent in the background instead of
+      holding the page. Saves made while the server is known to be down wait on the device at once.
+- [x] The "save every page ahead of time" pass after each update is gone (~200 requests): every page is worked out
+      from the device copy (`local.ts`), which `check-local.mjs` keeps equal to the server.
+- [x] Log out removes only the login. The data and any waiting changes stay; with a device copy
+      (`localStorage.petalboard_device_copy`) every page still opens, read only, with a "Logged out · Log in" notice.
+      Waiting changes are sent after the next login (logout warns about them first). A login that ended (401)
+      does the same instead of jumping to /login. Login page: "Open the data on this device without logging in".
+- [x] Settings: Login card with Log out / Log in (phones had none); people list says it needs the server.
+- [x] Checked (390 px, production build): 15 pages offline in ~0.3 s each, offline daily entry waits and survives a
+      reload, logout offline keeps data + waiting change, logged-out browsing offline and online, log in again →
+      the change reached the database once.
+
+Still online only (they need the server by nature): logging in, the people list, restore, the Excel/zip downloads
+made by the server (the device's own copy can always be downloaded from Settings).

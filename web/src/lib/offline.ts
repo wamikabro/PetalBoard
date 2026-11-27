@@ -13,7 +13,7 @@
 //   - A reply from a different database (another db_id) is refused.
 //   - If a reply would make the copy much smaller (e.g. 300 bills here, 20 on the server), it is
 //     refused and a warning is shown. Someone must choose to accept it in Settings.
-import { API_URL, getToken, getUser } from './api';
+import { API_URL, COPY_KEY, getToken, getUser } from './api';
 import { LOCAL_TABLES, LocalError, applyPending, localAnswer, type Ctx, type PendingItem, type Tables } from './local';
 
 export const SYNC_TABLES = ['shop_settings', 'users', 'flowers', 'suppliers', 'investors', 'bills', 'bill_days', 'kharcha',
@@ -37,7 +37,6 @@ export type SyncState = {
   status: 'never' | 'ok' | 'offline' | 'blocked' | 'error';
   warning?: string;
   serverCounts?: Record<string, number>;
-  prefetchedRev?: number;
 };
 
 // ---------- IndexedDB basics ----------
@@ -268,7 +267,6 @@ async function doSync({ force = false, accept = false }): Promise<SyncState> {
       }
     }
   }
-  const changedBills = new Set<number>(), changedSuppliers = new Set<number>();
   const db = await openDb();
   const tx = db.transaction([...SYNC_TABLES], 'readwrite');
   const replacing = !!(accept && s.dbId && s.dbId !== d.db_id);
@@ -279,9 +277,6 @@ async function doSync({ force = false, accept = false }): Promise<SyncState> {
     for (const row of d.tables[t]) {
       store.put(row);
       keep?.add(row._key);
-      if (t === 'bills') { changedBills.add(row.id); changedSuppliers.add(row.supplier_id); }
-      if (t === 'bill_days' || t === 'kharcha') changedBills.add(row.bill_id);
-      if (t === 'advances' || t === 'khaatas' || t === 'khaata_shares') changedSuppliers.add(row.supplier_id);
     }
     // A full check: rows that are here but no longer on the server (counts already checked above).
     if (keep && !replacing) {
@@ -291,7 +286,6 @@ async function doSync({ force = false, accept = false }): Promise<SyncState> {
   }
   for (const del of d.deletions) {
     if ((SYNC_TABLES as readonly string[]).includes(del.table)) tx.objectStore(del.table).delete(del.key);
-    if (del.table === 'bill_days' || del.table === 'kharcha' || del.table === 'bills') changedBills.add(-1); // something changed
   }
   await finished(tx);
   tablesCache = null;
@@ -300,52 +294,14 @@ async function doSync({ force = false, accept = false }): Promise<SyncState> {
   for (const t of SYNC_TABLES) counts[t] = await done(ctx.objectStore(t).count());
   const next: SyncState = {
     dbId: d.db_id, rev: d.rev, lastSync: Date.now(), lastTry: Date.now(), lastFull: full ? Date.now() : s.lastFull,
-    counts, status: 'ok', prefetchedRev: s.prefetchedRev,
+    counts, status: 'ok',
   };
   await setState(next);
+  try { if (d.rev > 0) localStorage.setItem(COPY_KEY, '1'); } catch { /* private mode */ }
   // Saves that reached the server before this update started are in the copy now: stop drawing them on top.
   for (const it of await outboxItems()) if (it.sent && it.sent_at <= startedAt) await outboxDelete(it.seq);
-  window.dispatchEvent(new CustomEvent('petalboard:synced'));
-  if (next.prefetchedRev !== d.rev) prefetch(next, full || !s.prefetchedRev, changedBills, changedSuppliers);
+  window.dispatchEvent(new CustomEvent('petalboard:synced', { detail: { changed: d.rev !== s.rev } }));
   return next;
-}
-
-// ---------- save the pages' data ahead of time ----------
-
-let prefetching = false;
-async function prefetch(state: SyncState, everything: boolean, bills: Set<number>, suppliers: Set<number>) {
-  if (prefetching) return;
-  prefetching = true;
-  try {
-    const { api } = await import('./api');
-    const get = (path: string, params?: Record<string, any>) => api(path, { params }).catch(() => null);
-    const today = new Date();
-    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    for (const p of ['/settings', '/flowers', '/suppliers', '/reports/overview', '/reports/balances', '/investors']) await get(p);
-    await get('/suppliers', { include_inactive: true });
-    await get(`/daily/${iso(today)}`);
-    await get(`/daily/${iso(new Date(today.getTime() - 864e5))}`);
-    const months: any[] = (await get('/bills/months')) || [];
-    const recent = months.map((m: any) => (typeof m === 'string' ? m : m.month)).filter(Boolean).sort().slice(-2);
-    for (const m of recent) {
-      const list: any[] = (await get('/bills', { month: m })) || [];
-      await get('/reports/month', { month: m });
-      for (const b of list) {
-        if (!everything && !bills.has(b.id) && !bills.has(-1) && (await savedResponse(`/bills/${b.id}`))) continue;
-        await get(`/bills/${b.id}`);
-        await get(`/bills/${b.id}/neighbours`);
-      }
-    }
-    const sups: any[] = (await get('/suppliers')) || [];
-    for (const s of sups) {
-      if (!everything && !suppliers.has(s.id) && (await savedResponse(`/suppliers/${s.id}`))) continue;
-      await get(`/suppliers/${s.id}`);
-    }
-    for (const i of ((await get('/investors')) || []) as any[]) await get(`/investors/${i.id}`);
-    await setState({ ...(await getState()), prefetchedRev: state.rev });
-  } finally {
-    prefetching = false;
-  }
 }
 
 // ---------- a copy of this device's data, as a file ----------
@@ -367,6 +323,8 @@ export async function deviceCopy(): Promise<Blob> {
 
 let started = false;
 export function startSync() {
+  // A copy made before this flag existed still counts.
+  getState().then((s) => { try { if (s.rev > 0) localStorage.setItem(COPY_KEY, '1'); } catch { /* ignore */ } });
   if (started || !getToken() || !('indexedDB' in window)) return;
   started = true;
   setTimeout(() => syncNow(), 1500);

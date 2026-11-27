@@ -4,7 +4,7 @@ const PRODUCTION_API = 'https://api.129.213.60.139.sslip.io';
 export const API_URL: string = (import.meta.env.PUBLIC_API_URL || PRODUCTION_API).replace(/\/$/, '');
 
 import { deviceAnswer, saveResponse } from './offline';
-import { flush, hasWaiting } from './outbox';
+import { flush, flushSoon, hasWaiting } from './outbox';
 
 const TOKEN_KEY = 'petalboard_token';
 const USER_KEY = 'petalboard_user';
@@ -24,8 +24,15 @@ export function getUser(): User | null {
 export function saveLogin(token: string, user: User) {
   try { store()?.setItem(TOKEN_KEY, token); store()?.setItem(USER_KEY, JSON.stringify(user)); } catch { /* private mode */ }
 }
+/** Log out on this device. Only the login goes: the shop's data saved on the device (offline.ts) and any
+ *  changes still waiting to be sent stay, so the data can always be seen here, logged in or not. */
 export function clearLogin() {
   try { store()?.removeItem(TOKEN_KEY); store()?.removeItem(USER_KEY); } catch { /* ignore */ }
+}
+/** True once this device holds a copy of the shop's data (set by offline.ts after the first full update). */
+export const COPY_KEY = 'petalboard_device_copy';
+export function hasDeviceCopy(): boolean {
+  try { return store()?.getItem(COPY_KEY) === '1'; } catch { return false; }
 }
 
 // ---------- temporary ids (things made offline) and the real ids the server gave them ----------
@@ -53,6 +60,21 @@ export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
+// The server failed a moment ago: for a short while reads come straight from this device instead of
+// waiting for the network again on every page (the background update keeps checking for the server).
+let downUntil = 0;
+const DOWN_FOR = 20e3;
+/** True while the server is known to be unreachable (saves then wait on this device at once). */
+export const serverDown = () => !navigator.onLine || Date.now() < downUntil;
+if (typeof window !== 'undefined') window.addEventListener('online', () => { downUntil = 0; });
+
+/** fetch, giving up after `ms` (a phone on a weak signal can otherwise wait for minutes). */
+function fetchWithin(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  return fetch(url, { ...init, signal: ctl.signal }).finally(() => clearTimeout(timer));
+}
+
 export async function api<T = any>(
   path: string,
   opts: { method?: string; body?: unknown; params?: Record<string, any>; headers?: Record<string, string> } = {},
@@ -72,45 +94,66 @@ export async function api<T = any>(
   if (token) headers.Authorization = `Bearer ${token}`;
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   const method = opts.method || 'GET';
-  const send = () => fetch(url, { method, headers, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
   const keep = method === 'GET' && !path.startsWith('/sync') && !path.startsWith('/export') && !path.startsWith('/auth');
-  /** No server: show what was saved on this device the last time, if anything. */
-  const fromDevice = async (why: string) => {
+  const copy = keep && hasDeviceCopy();
+  /** No server: show what this device has. */
+  const fromDevice = async (why: string, loggedOut = false, quiet = false) => {
     let saved: { data: any; at: number } | null = null;
     try {
       saved = keep ? await deviceAnswer(url) : null;
     } catch (e: any) {
       throw new ApiError(e?.status || 0, e?.message || why);
     }
-    if (!saved) throw new ApiError(0, why);
-    window.dispatchEvent(new CustomEvent('petalboard:offline', { detail: { at: saved.at } }));
+    if (!saved) throw new ApiError(loggedOut ? 401 : 0, why);
+    if (!quiet) window.dispatchEvent(new CustomEvent(loggedOut ? 'petalboard:loggedout' : 'petalboard:offline', { detail: { at: saved.at } }));
     return saved.data as T;
   };
+  // Logged out: the data on this device can still be seen; changes need a login.
+  if (!token && !path.startsWith('/auth/login')) {
+    if (keep) return fromDevice('Log in to see this page.', true);
+    throw new ApiError(401, 'You are logged out. Log in to make changes.');
+  }
+  // No connection at all, or the server failed a moment ago: answer from this device at once.
+  if (copy && (!navigator.onLine || Date.now() < downUntil)) return fromDevice('No connection to the server.');
   // Changes made on this device still waiting: send them first, so the answer includes them.
   // If they cannot go yet, answer from this device (it shows them on top of the saved data).
   if (keep && (await hasWaiting())) {
+    // With a copy here, do not make the page wait for the sending: show it from this device now.
+    if (copy) { flushSoon(0); return fromDevice('Changes are waiting to be sent.', false, navigator.onLine); }
     const st = await flush();
     if (st.waiting) return fromDevice('Changes are waiting to be sent.');
   }
+  const init: RequestInit = { method, headers, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined };
+  // Reads with a copy here wait a few seconds at most; the rest get longer (a save, a download, the first visit).
+  const send = () => fetchWithin(url, init, copy ? 6000 : method === 'GET' ? 30000 : 20000);
   let res: Response;
   try {
     res = await send();
   } catch {
-    // A dropped connection: try reads once more. Saves are not repeated, so nothing is entered twice.
+    // Saves are not repeated here: outbox.ts keeps them and sends them again with the same change id.
     if (method !== 'GET') throw new ApiError(0, 'Cannot reach the server. Check the internet connection and try again.');
     try {
+      if (copy) throw new Error('use the copy');
       await new Promise((r) => setTimeout(r, 800));
       res = await send();
     } catch {
+      downUntil = Date.now() + DOWN_FOR;
       return fromDevice('Cannot reach the server. Check the internet connection.');
     }
   }
   // The server is there but its app is down (proxy error): same as no server, for reading.
-  if (method === 'GET' && [502, 503, 504].includes(res.status)) return fromDevice(`The server is not answering (${res.status}).`);
+  if (method === 'GET' && [502, 503, 504].includes(res.status)) {
+    downUntil = Date.now() + DOWN_FOR;
+    return fromDevice(`The server is not answering (${res.status}).`);
+  }
+  downUntil = 0;
   if (res.status === 401 && !path.startsWith('/auth/login')) {
+    // The login ended (logged out elsewhere, or not used for a year). The data on this device stays and
+    // can still be seen; log in again to save.
     clearLogin();
-    location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
-    throw new ApiError(401, 'Please log in');
+    if (keep) return fromDevice('Your login has ended. Please log in again.', true);
+    window.dispatchEvent(new CustomEvent('petalboard:loggedout', { detail: {} }));
+    throw new ApiError(401, 'Your login has ended. Log in again to save.');
   }
   const data = res.status === 204 ? null : await res.json().catch(() => null);
   if (!res.ok) {

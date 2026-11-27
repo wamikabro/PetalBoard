@@ -44,7 +44,13 @@ const nav = [
     </script>
     {!bare && (
       <script is:inline>
-        try { if (!localStorage.getItem('petalboard_token')) location.replace('/login?next=' + encodeURIComponent(location.pathname + location.search)); } catch {}
+        // Logged out, but this device holds the shop's data: open it anyway (read only). Otherwise log in first.
+        try {
+          if (!localStorage.getItem('petalboard_token')) {
+            if (localStorage.getItem('petalboard_device_copy') === '1') document.documentElement.classList.add('is-loggedout');
+            else location.replace('/login?next=' + encodeURIComponent(location.pathname + location.search));
+          }
+        } catch {}
       </script>
     )}
   </head>
@@ -79,6 +85,7 @@ const nav = [
               </button>
             </div>
             <button class="mt-2 w-full text-left text-xs text-muted hover:text-ink px-2" data-logout>Log out</button>
+            <a href="/login" class="mt-2 block text-xs text-brand font-medium px-2" data-login>Log in</a>
           </div>
         </aside>
 
@@ -118,16 +125,19 @@ const nav = [
       /* --offline-h is the notice's real height: on a phone it wraps onto two or three lines. */
       html.is-offline body { padding-top: var(--offline-h, 1.5rem); }
       html.is-offline header.sticky { top: var(--offline-h, 1.5rem); }
+      html.is-loggedout [data-logout], html:not(.is-loggedout) [data-login] { display: none; }
     </style>
     <div id="offline-banner" role="status" class="hidden no-print fixed top-0 inset-x-0 z-[55] bg-warn text-white text-xs font-medium text-center py-1 px-3"></div>
     <div id="toasts" class="no-print fixed z-[60] bottom-24 lg:bottom-6 right-4 left-4 sm:left-auto flex flex-col items-end gap-2 pointer-events-none" aria-live="polite"></div>
     <script>
-      import { api, clearLogin, getUser, getToken } from '../lib/api';
+      import { api, clearLogin, getUser, getToken, hasDeviceCopy } from '../lib/api';
       import { startSync } from '../lib/offline';
-      import { outboxStatus, startOutbox, type OutboxStatus } from '../lib/outbox';
+      import { flush, outboxStatus, startOutbox, type OutboxStatus } from '../lib/outbox';
+      import { dialog } from '../lib/ui';
       // Keep a copy of all data on this device (safe if the server is lost; pages work offline),
       // and send changes made here without a connection once it is back.
-      if (getToken()) { startSync(); startOutbox(); }
+      startSync(); // does nothing but remember the copy when logged out
+      if (getToken()) startOutbox();
       let savedTimer: any = null;
       function showOutbox(st: OutboxStatus, justSent = false) {
         const offline = document.documentElement.classList.contains('is-offline');
@@ -152,7 +162,23 @@ const nav = [
       const banner = document.getElementById('offline-banner')!;
       const fitBanner = () => document.documentElement.style.setProperty('--offline-h', `${banner.offsetHeight}px`);
       window.addEventListener('resize', () => { if (!banner.classList.contains('hidden')) fitBanner(); });
+      const whenText = (ms: number) => {
+        const at = new Date(ms);
+        return at.toDateString() === new Date().toDateString()
+          ? at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+          : at.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+      };
+      const showLoggedOut = (at?: number) => {
+        document.documentElement.classList.add('is-loggedout', 'is-offline');
+        const next = encodeURIComponent(location.pathname + location.search);
+        banner.innerHTML = `Logged out · showing the data kept on this phone${at ? ` (updated ${whenText(at)})` : ''} · <a class="underline font-semibold" href="/login?next=${next}">Log in</a> to make changes`;
+        banner.classList.remove('hidden');
+        fitBanner();
+      };
+      window.addEventListener('petalboard:loggedout', (e: Event) => showLoggedOut((e as CustomEvent).detail?.at));
+      if (!getToken()) showLoggedOut();
       window.addEventListener('petalboard:offline', (e: Event) => {
+        if (!getToken()) return showLoggedOut((e as CustomEvent).detail.at);
         const at = new Date((e as CustomEvent).detail.at);
         const when = at.toDateString() === new Date().toDateString()
           ? at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
@@ -163,6 +189,7 @@ const nav = [
         fitBanner();
       });
       window.addEventListener('petalboard:online', () => {
+        if (!getToken()) return;
         banner.classList.add('hidden');
         document.documentElement.classList.remove('is-offline');
       });
@@ -173,8 +200,8 @@ const nav = [
         navigator.storage?.persist?.().catch(() => {});
       }
       const u = getUser();
-      document.querySelectorAll('[data-user-name]').forEach((e) => (e.textContent = u?.display_name || ''));
-      document.querySelectorAll('[data-user-role]').forEach((e) => (e.textContent = u?.role || ''));
+      document.querySelectorAll('[data-user-name]').forEach((e) => (e.textContent = u?.display_name || 'Logged out'));
+      document.querySelectorAll('[data-user-role]').forEach((e) => (e.textContent = u?.role || 'data on this device'));
       document.querySelectorAll('[data-user-initial]').forEach((e) => (e.textContent = (u?.display_name || '·')[0]));
       document.querySelectorAll('[data-theme-toggle]').forEach((b) =>
         b.addEventListener('click', () => {
@@ -187,11 +214,18 @@ const nav = [
           window.dispatchEvent(new Event('themechange'));
         }),
       );
+      // Log out: only the login is removed. All data stays on this device and can still be opened.
       document.querySelectorAll('[data-logout]').forEach((b) =>
         b.addEventListener('click', async () => {
-          try { await api('/auth/logout', { method: 'POST' }); } catch {}
+          let st = await outboxStatus();
+          if (st.waiting && navigator.onLine) st = await flush();
+          if (st.waiting) {
+            const ok = await dialog('Log out?', `<p class="text-sm">${st.waiting} change${st.waiting > 1 ? 's have' : ' has'} not reached the server yet. ${st.waiting > 1 ? 'They stay' : 'It stays'} on this phone and ${st.waiting > 1 ? 'are' : 'is'} sent the next time someone logs in here.</p>`, 'Log out');
+            if (!ok) return;
+          }
+          try { if (navigator.onLine) await api('/auth/logout', { method: 'POST' }); } catch {}
           clearLogin();
-          location.href = '/login';
+          location.href = hasDeviceCopy() ? '/' : '/login';
         }),
       );
     </script>

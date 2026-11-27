@@ -28,12 +28,20 @@ import App from '../layouts/App.astro';
       </div>
 
       <p class="mt-5 text-center text-xs text-muted">This device stays logged in after the first time.</p>
+      <a id="open-copy" href="/" class="hidden mt-4 btn-ghost w-full !h-11 justify-center">Open the data on this device without logging in</a>
     </form>
   </div>
 </App>
 
 <script>
-  import { api, saveLogin } from '../lib/api';
+  import { api, hasDeviceCopy, saveLogin } from '../lib/api';
+  // Logged out, but the shop's data is kept on this device: it can be opened (read only) without logging in.
+  if (hasDeviceCopy()) {
+    const a = document.getElementById('open-copy') as HTMLAnchorElement;
+    const next = new URLSearchParams(location.search).get('next');
+    if (next && next.startsWith('/') && !next.startsWith('//')) a.href = next;
+    a.classList.remove('hidden');
+  }
   const form = document.getElementById('login') as HTMLFormElement;
   const err = document.getElementById('err')!;
   const pw = document.getElementById('password') as HTMLInputElement;
@@ -47,6 +55,15 @@ import App from '../layouts/App.astro';
     btn.disabled = true;
     btn.textContent = 'Logging in…';
     err.classList.add('hidden');
+    if (!navigator.onLine) {
+      err.textContent = hasDeviceCopy()
+        ? 'No internet: logging in needs a connection. You can still open the data on this device below.'
+        : 'No internet: logging in needs a connection.';
+      err.classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = 'Log in';
+      return;
+    }
     try {
       const r = await api('/auth/login', { method: 'POST', body: { password: pw.value } });
       saveLogin(r.token, r.user);

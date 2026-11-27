@@ -10,7 +10,7 @@
 //   - Two devices changing the same day: the change made later wins (daily rows carry made_at); the other one
 //     is listed in Settings to check. A save the server refuses later (e.g. the month was closed on another
 //     phone) is listed there too.
-import { api, ApiError, realId, realIds, rememberId } from './api';
+import { api, ApiError, getToken, realId, realIds, rememberId, serverDown } from './api';
 import { toast } from './ui';
 import { LocalError, createdIds, createdTable, remapItem, type PendingItem } from './local';
 import { deviceView, outboxDelete, outboxItems, outboxPut, problemAdd, problemsAll, syncNow } from './offline';
@@ -139,6 +139,8 @@ async function queue(q: Queued, delay = 300) {
  *  Returns queued = true when it is waiting on this device, and the id of anything it made (temporary
  *  while waiting). Throws when the server (or, while waiting, this device) refuses it. */
 export async function submit(c: Change): Promise<{ queued: boolean; result?: any; id?: number | null }> {
+  // Logged out: the data can be seen, not changed (a change must say who made it).
+  if (!getToken()) throw new ApiError(401, 'You are logged out. Log in to make changes.');
   // A kharcha that never left this device: removing it just takes it out of the outbox.
   if (c.kind === 'kharcha_del' && c.client_id && (await dropQueuedKharcha(c.client_id))) {
     announce();
@@ -146,7 +148,7 @@ export async function submit(c: Change): Promise<{ queued: boolean; result?: any
   }
   const q = await prepare(c);
   // Anything already waiting goes first, so saves reach the server in the order they were made.
-  if (waitingOnly(await outboxItems()).length || !navigator.onLine) {
+  if (waitingOnly(await outboxItems()).length || serverDown()) {
     await queue(q);
     return { queued: true, id: q.temp_id ?? null };
   }
@@ -199,6 +201,7 @@ export function flushSoon(ms = 300) {
 /** Send what is waiting, oldest first. Stops at the first save that cannot reach the server. */
 export async function flush(): Promise<OutboxStatus> {
   if (flushing) return announce(true);
+  if (!getToken()) return announce(false); // kept on this device until someone logs in again
   flushing = true;
   let sent = 0;
   try {

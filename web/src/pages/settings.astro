@@ -5,6 +5,15 @@ import App from '../layouts/App.astro';
   <div class="space-y-5">
     <div><p class="text-sm text-muted">Settings</p><h1 class="h-title">Shop, people and backups</h1></div>
 
+    <section class="card card-pad flex flex-wrap items-center gap-3">
+      <div class="flex-1 min-w-0">
+        <h2 class="font-semibold">Login</h2>
+        <p class="text-sm text-muted" id="me-line"></p>
+      </div>
+      <button class="btn-ghost" data-logout>Log out</button>
+      <a class="btn-primary" href="/login?next=/settings" data-login>Log in</a>
+    </section>
+
     <section class="card card-pad space-y-3">
       <div>
         <h2 class="font-semibold">Backup and downloads</h2>
@@ -23,7 +32,8 @@ import App from '../layouts/App.astro';
       <div>
         <h2 class="font-semibold">Data on this device</h2>
         <p class="text-sm text-muted">This phone or computer keeps its own copy of all the data and updates it every few minutes.
-          If the server is ever lost, the data is still here. A problem on the server never deletes this copy.</p>
+          If the server is ever lost, the data is still here. A problem on the server never deletes this copy, and
+          logging out does not delete it either: the data can still be opened here without logging in.</p>
       </div>
       <div id="device-status" class="text-sm">…</div>
       <div id="device-warning" class="hidden rounded-lg bg-warn/10 text-sm p-3 space-y-2"></div>
@@ -97,6 +107,13 @@ import App from '../layouts/App.astro';
   import { busy, dialog, download, toast } from '../lib/ui';
   import { deviceCopy, getState, outboxItems, problemDelete, problemsAll, syncNow, type SyncState } from '../lib/offline';
   import { flush, outboxStatus } from '../lib/outbox';
+
+  {
+    const me = getUser();
+    document.getElementById('me-line')!.textContent = me
+      ? `Logged in as ${me.display_name} (${me.role}). Logging out keeps all the data on this device.`
+      : 'Logged out. The data on this device can be seen; log in to make changes or update it.';
+  }
 
   // ---- changes made on this device: waiting, and problems to check ----
   const fmtTime = (t: number) => new Date(t).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -212,7 +229,14 @@ import App from '../layouts/App.astro';
 
   const ROLES = ['owner', 'manager', 'clerk', 'viewer'];
   async function loadUsers() {
-    const us = await api('/users');
+    let us: any[];
+    try {
+      us = await api('/users');
+    } catch (e: any) {
+      // Logins are kept only on the server (passwords are never on a phone).
+      $('users').innerHTML = `<tr><td colspan="4" class="text-center text-muted py-6">${e.status === 0 || e.status === 401 ? 'The list of people needs a connection to the server.' : esc(e.message)}</td></tr>`;
+      return;
+    }
     const me = getUser();
     $('users').innerHTML = us.map((u: any) => `<tr>
       <td class="font-medium">${esc(u.display_name)}${u.id === me?.id ? ' <span class="text-xs text-muted">(you)</span>' : ''}</td>
