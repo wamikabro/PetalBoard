@@ -16,6 +16,15 @@ import App from '../layouts/App.astro';
       </div>
     </div>
 
+    <section class="card card-pad" id="forecast-card">
+      <div class="flex flex-wrap justify-between items-baseline gap-x-3 gap-y-1">
+        <h2 class="font-semibold">Today's rate forecast</h2>
+        <p class="text-xs text-muted" id="forecast-date"></p>
+      </div>
+      <div id="forecast" class="grid sm:grid-cols-2 xl:grid-cols-3 gap-3 mt-3"><p class="text-sm text-muted">Working it out…</p></div>
+      <p class="text-xs text-muted mt-3">Average Rs per kg across suppliers, predicted from the days before (momentum of the last change plus the usual weekday pattern). A guess, not a price: big days (Eid, weddings) can't be foreseen.</p>
+    </section>
+
     <div id="tiles" class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3"></div>
 
     <div class="grid xl:grid-cols-2 gap-4">
@@ -75,7 +84,7 @@ import App from '../layouts/App.astro';
 <script>
   import { api } from '../lib/api';
   import { makeChart, onTheme, series } from '../lib/charts';
-  import { compact, esc, kg, monthName, monthShort, num, rs, rsSigned, shiftMonth, thisMonth } from '../lib/format';
+  import { compact, esc, kg, monthName, monthShort, num, prettyDate, rs, rsSigned, shiftMonth, thisMonth, today } from '../lib/format';
   import { qp, setQuery } from '../lib/ui';
 
   const $ = (id: string) => document.getElementById(id)!;
@@ -198,6 +207,34 @@ import App from '../layouts/App.astro';
     if (!themed) { themed = true; onTheme(() => rep && charts()); } else charts();
   }
 
+  /** Today's (and tomorrow's) average rate per flower: GET /reports/forecast (api/forecast.py). */
+  async function showForecast() {
+    const on = today();
+    $('forecast-date').textContent = prettyDate(on);
+    let fc: any;
+    try { fc = await api('/reports/forecast', { params: { on } }); }
+    catch { $('forecast').innerHTML = '<p class="text-sm text-muted">The forecast could not be loaded.</p>'; return; }
+    const short = (iso: string) => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    const change = (a: number, b: number) => {
+      const d = Math.round(a - b);
+      return d === 0 ? 'same as last' : `${d > 0 ? '▲' : '▼'} Rs ${Math.abs(d)} from last`;
+    };
+    $('forecast').innerHTML = fc.flowers.map((f: any) => {
+      const t = f.today, n = f.tomorrow, s = f.today_so_far;
+      if (!t) return '';
+      return `<div class="rounded-md border border-line p-3">
+        <div class="flex justify-between items-baseline gap-2">
+          <p class="stat-label">${esc(f.flower)} · today</p>
+          ${t.stale ? '<span class="chip bg-sunken text-muted">no recent entries</span>' : ''}
+        </div>
+        <p class="stat-value">Rs ${num(t.rate)}<span class="text-sm font-normal text-muted">/kg</span></p>
+        <p class="text-xs text-muted mt-0.5">${t.typical_miss != null && !t.stale ? `usually within ± Rs ${num(t.typical_miss)} · ` : ''}${t.method === 'model' ? `${change(t.rate, t.last_rate)} (Rs ${num(t.last_rate)} on ${short(t.last_date)})` : `last rate, from ${short(t.last_date)}: the model is not beating it for ${esc(f.flower)} yet`}</p>
+        ${s ? `<p class="text-sm mt-2">So far today: <span class="font-medium tabular-nums">Rs ${num(s.rate)}</span> <span class="text-xs text-muted">from ${s.suppliers} supplier${s.suppliers === 1 ? '' : 's'}, ${kg(Math.round(s.weight))} kg</span></p>` : ''}
+        ${n && !n.stale ? `<p class="text-sm mt-1 text-muted">Tomorrow: <span class="text-ink font-medium tabular-nums">Rs ${num(n.rate)}</span></p>` : ''}
+      </div>`;
+    }).join('') || '<p class="text-sm text-muted">No entries in the last 30 days to forecast from.</p>';
+  }
+
   $('rate-flower').addEventListener('change', () => charts());
   document.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-table]');
@@ -220,5 +257,6 @@ import App from '../layouts/App.astro';
     $('prev').addEventListener('click', () => { month = shiftMonth(month, -1); if (!months.includes(month)) { months.push(month); sel.innerHTML += `<option value="${month}">${monthName(month)}</option>`; } sel.value = month; load(); });
     $('next').addEventListener('click', () => { month = shiftMonth(month, 1); if (!months.includes(month)) { months.unshift(month); sel.insertAdjacentHTML('afterbegin', `<option value="${month}">${monthName(month)}</option>`); } sel.value = month; load(); });
     load();
+    showForecast();
   })();
 </script>

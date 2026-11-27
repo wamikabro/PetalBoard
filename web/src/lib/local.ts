@@ -345,6 +345,117 @@ function monthReport(d: Data, monthArg: string) {
   };
 }
 
+// ---------- rate forecast (api/forecast.py: SARIMA(1,1,0) with a weekly part, by hand) ----------
+
+const FC = { MIN_PAIRS: 14, MIN_WEEKDAY: 4, MAX_GAP: 7, ERROR_WINDOW: 60, PHI_LIMIT: 0.9 };
+/** Dates as whole days since 1970-01-01 (UTC), so day arithmetic is exact. */
+const dayNo = (iso: string) => Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000;
+const isoOf = (n: number) => new Date(n * 86400000).toISOString().slice(0, 10);
+const weekdayOf = (n: number) => (n + 3) % 7;   // Monday = 0, like Python's date.weekday()
+
+type Point = [number, number, number];   // day number, amount, grams
+
+function dailyRates(points: Point[]): Map<number, number> {
+  const amt = new Map<number, number>(), grams = new Map<number, number>();
+  for (const [d, a, g] of points) {
+    amt.set(d, (amt.get(d) || 0) + a);
+    grams.set(d, (grams.get(d) || 0) + g);
+  }
+  const out = new Map<number, number>();
+  for (const d of [...grams.keys()].sort((a, b) => a - b)) if (grams.get(d)! > 0) out.set(d, amt.get(d)! * 1000 / grams.get(d)!);
+  return out;
+}
+
+function fitRates(rates: Map<number, number>) {
+  const days = [...rates.keys()].sort((a, b) => a - b);
+  const change = new Map<number, number>();
+  for (const d of days) if (rates.has(d - 1)) change.set(d, rates.get(d)! - rates.get(d - 1)!);
+  const cdays = [...change.keys()].sort((a, b) => a - b);
+  let num = 0, den = 0, n = 0;
+  for (const d of cdays) {
+    if (!change.has(d - 1)) continue;
+    const a = change.get(d - 1)!, b = change.get(d)!;
+    num += a * b; den += a * a; n++;
+  }
+  let phi = n >= FC.MIN_PAIRS && den > 0 ? num / den : 0;
+  phi = Math.max(-FC.PHI_LIMIT, Math.min(FC.PHI_LIMIT, phi));
+  const left: number[][] = [[], [], [], [], [], [], []];
+  for (const d of cdays) left[weekdayOf(d)].push(change.get(d)! - phi * (change.get(d - 1) ?? 0));
+  const week = left.map((xs) => (xs.length >= FC.MIN_WEEKDAY ? xs.reduce((s, x) => s + x, 0) / xs.length : 0));
+  const misses: [number, number][] = cdays.map((d) => [d, Math.abs(change.get(d)! - phi * (change.get(d - 1) ?? 0) - week[weekdayOf(d)])]);
+  return { phi, week, change, misses };
+}
+
+function predictRate(rates: Map<number, number>, target: number) {
+  const past = new Map([...rates].filter(([d]) => d < target));
+  if (!past.size) return null;
+  const m = fitRates(past);
+  const last = Math.max(...past.keys());
+  const gap = target - last, level = past.get(last)!;
+  // Self-check: over the last 60 days, did the model miss by less than "same as the last day"?
+  const since = last - FC.ERROR_WINDOW;
+  const modelMiss = m.misses.filter(([d]) => d >= since).map(([, e]) => e);
+  const lastMiss = m.misses.filter(([d]) => d >= since).map(([d]) => Math.abs(m.change.get(d)!));
+  const total = (xs: number[]) => xs.reduce((s, x) => s + x, 0);
+  const useModel = modelMiss.length > 0 && total(modelMiss) < total(lastMiss);
+  let value = level;
+  const stale = gap > FC.MAX_GAP;
+  if (useModel && !stale) {
+    let c = m.change.get(last) ?? 0;
+    for (let k = 1; k <= gap; k++) {
+      c = m.phi * c + m.week[weekdayOf(last + k)];
+      value += c;
+    }
+  }
+  const recent = useModel ? modelMiss : lastMiss;
+  return {
+    rate: round(Math.max(value, 0), 1),
+    method: useModel ? 'model' : 'last',
+    typical_miss: recent.length ? round(recent.reduce((s, x) => s + x, 0) / recent.length, 1) : null,
+    last_date: isoOf(last),
+    last_rate: round(level, 1),
+    days_since: gap,
+    stale,
+    momentum: round(m.phi, 3),
+    weekday_effect: round(m.week[weekdayOf(target)], 1),
+    history_days: past.size,
+  };
+}
+
+function forecast(d: Data, on: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) throw new LocalError(422, 'Not a date');
+  const today = dayNo(on);
+  const byFlower = new Map<string, Point[]>();
+  for (const b of d.bills) {
+    if (b.month > on) continue;
+    const flower = (b.flower_id != null && d.flowers.get(b.flower_id)?.name) || 'Other';
+    const n = daysIn(b.month);
+    for (const x of d.days.get(b.id) || []) {
+      if (!(Number(x.weight) > 0) || x.rate == null || x.day > n) continue;
+      const at = dayNo(b.month) + x.day - 1;
+      if (at > today) continue;
+      push(byFlower, flower, [at, Number(x.amount), scaled(x.weight, 3)] as Point);
+    }
+  }
+  const flowers: any[] = [];
+  for (const [name, points] of byFlower) {
+    const rates = dailyRates(points);
+    if (![...rates.keys()].some((x) => x >= today - 30 && x <= today)) continue;
+    const soFar = points.filter(([x]) => x === today);
+    const g = soFar.reduce((s, p) => s + p[2], 0);
+    flowers.push({
+      flower: name,
+      today: predictRate(rates, today),
+      tomorrow: predictRate(rates, today + 1),
+      today_so_far: g ? { rate: round(soFar.reduce((s, p) => s + p[1], 0) * 1000 / g, 1), weight: g / 1000, suppliers: soFar.length } : null,
+      _kg: points.reduce((s, p) => s + p[2], 0),
+    });
+  }
+  flowers.sort((a, b) => b._kg - a._kg || byName(a.flower, b.flower));
+  for (const f of flowers) delete f._kg;
+  return { date: on, tomorrow: isoOf(today + 1), flowers };
+}
+
 function entries(d: Data, p: URLSearchParams) {
   const from = p.get('date_from') || '', to = p.get('date_to') || '';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new LocalError(422, 'Pick a start and an end date');
@@ -661,6 +772,7 @@ export function localAnswer(path: string, t: Tables): any {
   if (p === '/reports/entries') return entries(d(), params);
   if (p === '/reports/overview') return overview(d());
   if (p === '/reports/balances') return balances(d());
+  if (p === '/reports/forecast') return forecast(d(), params.get('on') || '');
   if (p === '/settings') return settings(d());
   if (p === '/suppliers') return supplierList(d(), params.get('include_inactive') === 'true');
   if ((m = /^\/suppliers\/(-?\d+)$/.exec(p))) return supplierPage(d(), Number(m[1]));

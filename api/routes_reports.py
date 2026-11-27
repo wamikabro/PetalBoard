@@ -1,10 +1,11 @@
 """Numbers for the dashboard: a month at a glance, trends across months, who owes whom."""
 
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 
 import db
+import forecast
 from billing import as_num, bill_summaries, days_in, month_start, prev_month
 from security import current_user
 
@@ -146,6 +147,27 @@ def overview(user: dict = Depends(current_user)):
     for b in bills:
         months.setdefault(b["month"], []).append(b)
     return [{"month": k, **_kpis(v)} for k, v in sorted(months.items())]
+
+
+@router.get("/reports/forecast")
+def rate_forecast(on: date, user: dict = Depends(current_user)):
+    """Today's and tomorrow's rate per flower (forecast.py). `on` is the phone's date (the server runs on UTC)."""
+    with db.transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT b.month, d.day, coalesce(f.name, 'Other') AS flower, d.amount, d.weight
+            FROM bill_days d JOIN bills b ON b.id = d.bill_id LEFT JOIN flowers f ON f.id = b.flower_id
+            WHERE d.weight > 0 AND d.rate IS NOT NULL AND b.month <= %s
+            """, (on,)).fetchall()
+    points: dict[str, list] = {}
+    for r in rows:
+        if r["day"] > days_in(r["month"]):   # e.g. 31 June from the workbook: no such date
+            continue
+        d = r["month"] + timedelta(days=r["day"] - 1)
+        if d > on:
+            continue
+        points.setdefault(r["flower"], []).append((d, int(r["amount"]), int(r["weight"] * 1000)))
+    return forecast.forecast(points, on)
 
 
 @router.get("/reports/balances")
